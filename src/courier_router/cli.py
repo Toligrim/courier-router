@@ -6,15 +6,17 @@ from .domain import GeoPoint
 from .geocode import DaDataGeocoder, PublicNominatimGeocoder
 from .llm import clean_with_openai, clean_with_anthropic
 from .optimizer import solve_single_vehicle
-from .parsing import read_excel
+from .parsing import read_table
 from .render import render_map
 from .report import itinerary_text, route_json
 from .routing import ORSRouter, OSRMRouter
 from .storage import Storage
 
+
 def minutes(s: str) -> int:
     h,m = s.split(":")
     return int(h)*60 + int(m)
+
 
 def get_geocoder(c: Config):
     if c.geocoder == "dadata":
@@ -23,12 +25,14 @@ def get_geocoder(c: Config):
         return PublicNominatimGeocoder(c.tile_user_agent)
     raise RuntimeError(f"Неизвестный GEOCODER={c.geocoder}")
 
+
 def get_router(c: Config):
     if c.router == "ors":
         return ORSRouter(c.ors_api_key)
     if c.router == "osrm":
         return OSRMRouter(c.osrm_url)
     raise RuntimeError(f"Неизвестный ROUTER={c.router}")
+
 
 def maybe_llm_clean(c: Config, address: str, district: str) -> str:
     if c.llm_provider == "openai":
@@ -41,12 +45,14 @@ def maybe_llm_clean(c: Config, address: str, district: str) -> str:
         return clean_with_anthropic(c.anthropic_api_key, c.anthropic_model, address, district)
     return address
 
+
 def depot(c: Config, geocoder=None):
     if c.depot_lat and c.depot_lon:
         return GeoPoint(float(c.depot_lat), float(c.depot_lon), "config", c.depot_address, "verified", 1.0)
     if geocoder is None:
         geocoder = get_geocoder(c)
     return geocoder.geocode(c.depot_address, "")
+
 
 def cmd_doctor(args):
     c = Config()
@@ -65,6 +71,7 @@ def cmd_doctor(args):
     print(f"llm={c.llm_provider}")
     return 0
 
+
 def cmd_geocode_depot(args):
     c = Config()
     g = get_geocoder(c)
@@ -73,6 +80,7 @@ def cmd_geocode_depot(args):
         "address": d.normalized_address, "lat": d.lat, "lon": d.lon,
         "provider": d.provider, "precision": d.precision, "confidence": d.confidence
     }, ensure_ascii=False, indent=2))
+
 
 def geocode_stops(c, stops, store, allow_low_confidence=False):
     g = get_geocoder(c)
@@ -112,10 +120,11 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
         })
     return report
 
+
 def cmd_plan(args):
     c = Config()
     store = Storage(c.db_path)
-    stops = read_excel(args.xlsx, c.default_service_min)
+    stops = read_table(args.xlsx, c.default_service_min)
     report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence)
     g = get_geocoder(c)
     d = depot(c, g)
@@ -152,6 +161,7 @@ def cmd_plan(args):
     print(f"\nГотово: {out.resolve()}")
     return 0
 
+
 def build_parser():
     p = argparse.ArgumentParser(prog="courier-route")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -159,8 +169,8 @@ def build_parser():
     d.set_defaults(func=cmd_doctor)
     gd = sub.add_parser("geocode-depot", help="Геокодировать фиксированную базу")
     gd.set_defaults(func=cmd_geocode_depot)
-    plan = sub.add_parser("plan", help="Построить маршрут из XLSX")
-    plan.add_argument("xlsx")
+    plan = sub.add_parser("plan", help="Построить маршрут из XLSX/CSV")
+    plan.add_argument("xlsx", help="Таблица .xlsx или .csv")
     plan.add_argument("--date", required=True)
     plan.add_argument("--depart", default=os.getenv("DEPART_TIME","10:00"))
     plan.add_argument("--end", choices=["depot","open"], default=os.getenv("END_MODE","depot"))
@@ -168,6 +178,7 @@ def build_parser():
     plan.add_argument("--allow-low-confidence", action="store_true", help="Не останавливать запуск при неточном геокодировании")
     plan.set_defaults(func=cmd_plan)
     return p
+
 
 def main():
     args = build_parser().parse_args()
@@ -178,6 +189,7 @@ def main():
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
