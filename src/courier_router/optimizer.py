@@ -1,13 +1,36 @@
 from __future__ import annotations
+import math
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from .domain import RouteSolution, RouteVisit, Stop
 
 DAY = 24 * 60
+UNREACHABLE_DURATION_SEC = 37 * 3600
+UNREACHABLE_DISTANCE_M = 1_000_000_000
+
+
+def _normalize_matrix(matrix, size: int, unreachable_value: int, name: str) -> list[list[int]]:
+    if len(matrix) != size or any(len(row) != size for row in matrix):
+        raise ValueError(f"Размер {name} matrix не соответствует количеству точек")
+
+    normalized = []
+    for row in matrix:
+        out = []
+        for value in row:
+            if value is None:
+                out.append(unreachable_value)
+                continue
+            value = float(value)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} matrix содержит некорректное значение: {value!r}")
+            out.append(int(round(value)))
+        normalized.append(out)
+    return normalized
+
 
 def solve_single_vehicle(
     stops: list[Stop],
-    durations: list[list[float]],
-    distances: list[list[float]],
+    durations: list[list[float | None]],
+    distances: list[list[float | None]],
     depart_min: int,
     end_mode: str = "depot",
     time_limit_sec: int = 8,
@@ -15,13 +38,13 @@ def solve_single_vehicle(
     """
     Matrix nodes: 0=depot, 1..N=stops.
     For open end we append a dummy end node with zero inbound/outbound cost.
+
+    Routing providers may return null/None for unreachable pairs. Such arcs get a
+    duration beyond the solver horizon, so they cannot be mistaken for free travel.
     """
     n_real = len(stops) + 1
-    if len(durations) != n_real:
-        raise ValueError("Размер routing matrix не соответствует количеству точек")
-
-    dur = [[int(round(v or 0)) for v in row] for row in durations]
-    dist = [[int(round(v or 0)) for v in row] for row in distances]
+    dur = _normalize_matrix(durations, n_real, UNREACHABLE_DURATION_SEC, "duration")
+    dist = _normalize_matrix(distances, n_real, UNREACHABLE_DISTANCE_M, "distance")
 
     if end_mode == "open":
         for row in dur:
@@ -85,7 +108,6 @@ def solve_single_vehicle(
 
     visits = []
     idx = routing.Start(0)
-    prev_node = 0
     total_distance = total_travel = total_service = total_wait = 0
 
     while not routing.IsEnd(idx):
