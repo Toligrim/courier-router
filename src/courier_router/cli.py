@@ -50,12 +50,28 @@ def maybe_llm_clean(c: Config, address: str, district: str) -> str:
     return address
 
 
+def _resolver_meta(geo) -> dict:
+    raw = getattr(geo, "raw", None)
+    if not isinstance(raw, dict):
+        return {}
+    value = raw.get("_resolver")
+    return value if isinstance(value, dict) else {}
+
+
 def depot(c: Config, geocoder=None):
     if c.depot_lat and c.depot_lon:
         return GeoPoint(float(c.depot_lat), float(c.depot_lon), "config", c.depot_address, "verified", 1.0)
     if geocoder is None:
         geocoder = get_geocoder(c)
-    return geocoder.geocode(c.depot_address, "")
+    point = geocoder.geocode(c.depot_address, "")
+    if point.provider == "dadata_verified":
+        status = _resolver_meta(point).get("status")
+        if status != VERIFIED:
+            raise RuntimeError(
+                f"Адрес базы не подтверждён детерминированно: {point.normalized_address!r} "
+                f"(status={status or 'unknown'})"
+            )
+    return point
 
 
 def cmd_doctor(args):
@@ -86,21 +102,17 @@ def cmd_geocode_depot(args):
     }, ensure_ascii=False, indent=2))
 
 
-def _resolver_meta(geo) -> dict:
-    raw = getattr(geo, "raw", None)
-    if not isinstance(raw, dict):
-        return {}
-    value = raw.get("_resolver")
-    return value if isinstance(value, dict) else {}
-
-
 def _cache_matches_geocoder(c, cached) -> bool:
     if not cached:
         return False
     provider = str(getattr(cached, "provider", ""))
     if c.geocoder == "dadata":
         resolver = _resolver_meta(cached)
-        return provider == "dadata_verified" and resolver.get("version") == VERIFICATION_VERSION
+        return (
+            provider == "dadata_verified"
+            and resolver.get("version") == VERIFICATION_VERSION
+            and resolver.get("status") == VERIFIED
+        )
     return provider == c.geocoder
 
 
@@ -127,14 +139,24 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
 
         resolver = _resolver_meta(s.geo)
         resolver_status = resolver.get("status")
+        candidate_values = [x.get("value") for x in resolver.get("candidates", []) if x.get("value")]
+        hint = f" Лучшие варианты: {'; '.join(candidate_values[:3])}" if candidate_values else ""
+
         if resolver_status == REJECTED:
-            candidate_values = [x.get("value") for x in resolver.get("candidates", []) if x.get("value")]
-            hint = f" Лучшие варианты: {'; '.join(candidate_values[:3])}" if candidate_values else ""
             s.warnings.append("Адрес не прошёл детерминированную верификацию")
+            raise RuntimeError(
+                f"Строка {s.source_row}: адрес отклонён проверкой Clean + Suggestions и не может "
+                f"использоваться в маршруте. Исходный: {s.address_raw!r}. "
+                f"Найдено: {s.geo.normalized_address!r}.{hint}"
+            )
+
+        if c.geocoder == "dadata" and resolver_status != VERIFIED:
+            s.warnings.append("Адрес требует ручной проверки перед маршрутизацией")
             if not allow_low_confidence:
                 raise RuntimeError(
-                    f"Строка {s.source_row}: адрес не прошёл проверку Clean + Suggestions. "
-                    f"Исходный: {s.address_raw!r}. Найдено: {s.geo.normalized_address!r}.{hint}"
+                    f"Строка {s.source_row}: адрес имеет статус REVIEW и требует проверки. "
+                    f"Исходный: {s.address_raw!r}. Найдено: {s.geo.normalized_address!r}.{hint} "
+                    "Для осознанного использования REVIEW укажите --allow-low-confidence."
                 )
 
         outside_expected_area = not (58.2 <= s.geo.lat <= 61.7 and 26.5 <= s.geo.lon <= 36.5)
@@ -146,14 +168,23 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                     f"{s.geo.lat}, {s.geo.lon}"
                 )
 
-        requires_review = s.geo.confidence < 0.80 or resolver_status in {REVIEW, REJECTED}
+        requires_review = (
+            s.geo.confidence < 0.80
+            or outside_expected_area
+            or (c.geocoder == "dadata" and resolver_status != VERIFIED)
+        )
         if requires_review:
             s.warnings.append(
                 f"Геокодирование требует проверки ({s.geo.confidence:.2f}, {s.geo.precision}) — "
                 "проверьте точку на карте"
             )
 
-        if not cache_valid and resolver_status != REJECTED and not outside_expected_area:
+        # Persist only deterministic VERIFIED DaData results. REVIEW is intentionally
+        # re-evaluated on the next run so newly-added FIAS/GAR houses are picked up.
+        should_cache = not outside_expected_area
+        if c.geocoder == "dadata":
+            should_cache = should_cache and resolver_status == VERIFIED
+        if not cache_valid and should_cache:
             store.put_geocode(s.address_raw, s.district, s.geo)
 
         report.append({
@@ -168,6 +199,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
             "resolver_candidates": resolver.get("candidates", []),
+            "candidate_selection": resolver.get("candidate_selection"),
             "clean_quality": resolver.get("clean_quality", {}),
             "crosscheck_distance_m": resolver.get("crosscheck_distance_m"),
             "clean_house_fias_id": resolver.get("clean_house_fias_id"),
@@ -232,7 +264,7 @@ def build_parser():
     plan.add_argument("--output", required=True)
     plan.add_argument(
         "--allow-low-confidence", action="store_true",
-        help="Явно разрешить REVIEW/REJECTED адреса и координаты вне ожидаемой зоны",
+        help="Явно разрешить REVIEW-адреса и координаты вне ожидаемой зоны; REJECTED не разрешается",
     )
     plan.set_defaults(func=cmd_plan)
     return p
