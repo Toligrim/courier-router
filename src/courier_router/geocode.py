@@ -25,6 +25,7 @@ GENERIC_STREET_WORDS = {
 
 def _norm_text(value: str | None) -> str:
     value = (value or "").lower().replace("ё", "е")
+    value = value.replace("санкт-петербург", "санкт петербург")
     value = re.sub(r"[^0-9a-zа-я/ -]+", " ", value)
     return " ".join(value.split())
 
