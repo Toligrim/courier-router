@@ -102,21 +102,29 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 s.warnings.append("Адрес потребовал LLM-нормализацию")
                 source = f"{c.geocoder}+{c.llm_provider}"
             store.put_geocode(s.address_raw, s.district, s.geo)
-        if not (58.2 <= s.geo.lat <= 61.7 and 26.5 <= s.geo.lon <= 36.5):
+
+        outside_expected_area = not (58.2 <= s.geo.lat <= 61.7 and 26.5 <= s.geo.lon <= 36.5)
+        if outside_expected_area:
             s.warnings.append("Координата находится вне ожидаемой зоны СПб/Ленобласти")
             if not allow_low_confidence:
-                raise RuntimeError(f"Строка {s.source_row}: геокодер вернул точку вне СПб/Ленобласти: {s.geo.lat}, {s.geo.lon}")
-        if s.geo.confidence < 0.80:
-            s.warnings.append("Низкая точность геокодирования — проверьте точку на карте")
-            if not allow_low_confidence:
                 raise RuntimeError(
-                    f"Строка {s.source_row}: confidence={s.geo.confidence:.2f} ниже 0.80. "
-                    "Проверьте адрес или повторите с --allow-low-confidence"
+                    f"Строка {s.source_row}: геокодер вернул точку вне СПб/Ленобласти: "
+                    f"{s.geo.lat}, {s.geo.lon}"
                 )
+
+        requires_review = s.geo.confidence < 0.80
+        if requires_review:
+            s.warnings.append(
+                f"Низкая точность геокодирования ({s.geo.confidence:.2f}, {s.geo.precision}) — "
+                "проверьте точку на карте"
+            )
+
         report.append({
             "row": s.source_row, "order_no": s.order_no, "raw": s.address_raw,
             "normalized": s.geo.normalized_address, "lat": s.geo.lat, "lon": s.geo.lon,
             "precision": s.geo.precision, "confidence": s.geo.confidence, "source": source,
+            "requires_review": requires_review,
+            "outside_expected_area": outside_expected_area,
         })
     return report
 
@@ -175,7 +183,10 @@ def build_parser():
     plan.add_argument("--depart", default=os.getenv("DEPART_TIME","10:00"))
     plan.add_argument("--end", choices=["depot","open"], default=os.getenv("END_MODE","depot"))
     plan.add_argument("--output", required=True)
-    plan.add_argument("--allow-low-confidence", action="store_true", help="Не останавливать запуск при неточном геокодировании")
+    plan.add_argument(
+        "--allow-low-confidence", action="store_true",
+        help="Разрешить также координаты вне ожидаемой зоны СПб/Ленобласти",
+    )
     plan.set_defaults(func=cmd_plan)
     return p
 
