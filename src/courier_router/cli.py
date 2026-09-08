@@ -23,7 +23,7 @@ def minutes(s: str) -> int:
 
 def get_geocoder(c: Config):
     if c.geocoder == "dadata":
-        return DaDataGeocoder(c.dadata_token, c.dadata_secret)
+        return DaDataGeocoder(c.dadata_token, c.dadata_secret, use_clean=c.dadata_use_clean)
     if c.geocoder == "nominatim":
         return PublicNominatimGeocoder(c.tile_user_agent)
     raise RuntimeError(f"Неизвестный GEOCODER={c.geocoder}")
