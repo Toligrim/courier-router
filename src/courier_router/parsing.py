@@ -109,11 +109,12 @@ def read_csv(path: str | Path, default_service_min: int = 10) -> list[Stop]:
         raise ValueError("CSV должен быть в UTF-8 или Windows-1251")
     sample = text[:4096]
     try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=";,\t,")
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
+        reader = csv.reader(text.splitlines(), dialect)
     except csv.Error:
-        dialect = csv.excel
-        dialect.delimiter = ";"
-    return _rows_to_stops(csv.reader(text.splitlines(), dialect), default_service_min)
+        # не трогаем csv.excel (это класс, правка delimiter на нём глобальна)
+        reader = csv.reader(text.splitlines(), delimiter=";")
+    return _rows_to_stops(reader, default_service_min)
 
 
 def read_table(path: str | Path, default_service_min: int = 10) -> list[Stop]:
