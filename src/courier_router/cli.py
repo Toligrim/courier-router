@@ -82,10 +82,11 @@ def cmd_geocode_depot(args):
     }, ensure_ascii=False, indent=2))
 
 
-def _resolver_meta(geo: GeoPoint) -> dict:
-    if not isinstance(geo.raw, dict):
+def _resolver_meta(geo) -> dict:
+    raw = getattr(geo, "raw", None)
+    if not isinstance(raw, dict):
         return {}
-    value = geo.raw.get("_resolver")
+    value = raw.get("_resolver")
     return value if isinstance(value, dict) else {}
 
 
