@@ -55,6 +55,7 @@ class RouteVisit:
     departure_min: int
     travel_sec_from_prev: int
     distance_m_from_prev: int
+    late_by_min: int = 0
 
 @dataclass
 class RouteSolution:
@@ -65,3 +66,5 @@ class RouteSolution:
     total_wait_sec: int
     feasible: bool = True
     warnings: list[str] = field(default_factory=list)
+    used_soft_windows: bool = False
+    total_late_min: int = 0

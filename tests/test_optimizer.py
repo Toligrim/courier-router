@@ -24,7 +24,41 @@ def test_small_route():
     ]
     sol = solve_single_vehicle(stops, dur, dist, depart_min=600, time_limit_sec=1)
     assert sol.feasible
+    assert not sol.used_soft_windows
     assert [v.stop_index for v in sol.visits] == [0,1]
+
+
+def test_infeasible_strict_windows_fall_back_to_minimized_lateness():
+    # Both clients demand 10:00 exactly, but the first drive already takes 10 min.
+    # Strict VRPTW is impossible; best-effort mode should still return a route.
+    stops = [stop(1, 600, 600), stop(2, 600, 600)]
+    dur = [
+        [0, 600, 600],
+        [600, 0, 600],
+        [600, 600, 0],
+    ]
+    dist = [
+        [0, 5000, 5000],
+        [5000, 0, 5000],
+        [5000, 5000, 0],
+    ]
+    sol = solve_single_vehicle(stops, dur, dist, depart_min=600, end_mode="open", time_limit_sec=1)
+    assert sol.feasible
+    assert sol.used_soft_windows
+    assert sol.total_late_min > 0
+    assert any(v.late_by_min > 0 for v in sol.visits)
+    assert any("минимизацией опозданий" in w for w in sol.warnings)
+
+
+def test_soft_window_fallback_can_be_disabled():
+    stops = [stop(1, 600, 600)]
+    dur = [[0, 600], [600, 0]]
+    dist = [[0, 5000], [5000, 0]]
+    sol = solve_single_vehicle(
+        stops, dur, dist, depart_min=600, end_mode="open", time_limit_sec=1,
+        fallback_to_soft_windows=False,
+    )
+    assert not sol.feasible
 
 
 def test_unreachable_arc_is_not_treated_as_zero_cost():
