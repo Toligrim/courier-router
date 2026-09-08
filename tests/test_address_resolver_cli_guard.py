@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from courier_router.address_verification import VERIFICATION_VERSION, VERIFIED, REJECTED
 from courier_router.cli import geocode_stops
 from courier_router.domain import GeoPoint, Operation, Payment, Stop
-from courier_router.geocode import RESOLVER_VERSION
 
 
 class FakeStore:
@@ -43,19 +43,19 @@ def make_stop():
     )
 
 
-def test_strong_mismatch_blocks_without_override(monkeypatch):
+def test_rejected_address_blocks_without_override(monkeypatch):
     geo = GeoPoint(
-        59.9, 29.1, "dadata_clean",
+        59.9, 29.1, "dadata_verified",
         "Ленинградская обл, г Сосновый Бор, СНТ Приморский, д 53 к 1",
-        "settlement", 0.30,
-        raw={"_resolver": {"version": RESOLVER_VERSION, "status": "strong_mismatch", "candidates": []}},
+        "review", 0.20,
+        raw={"_resolver": {"version": VERIFICATION_VERSION, "status": REJECTED, "candidates": []}},
     )
     fake = FakeGeocoder(geo)
     store = FakeStore()
     monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
     c = SimpleNamespace(geocoder="dadata", llm_provider="none")
 
-    with pytest.raises(RuntimeError, match="сильно расходится"):
+    with pytest.raises(RuntimeError, match="не прошёл проверку"):
         geocode_stops(c, [make_stop()], store, allow_low_confidence=False)
 
     assert store.saved is None
@@ -64,10 +64,10 @@ def test_strong_mismatch_blocks_without_override(monkeypatch):
 def test_legacy_dadata_cache_is_refreshed(monkeypatch):
     legacy = GeoPoint(59.9, 29.1, "dadata", "old wrong", "settlement", 0.55, raw={})
     fresh = GeoPoint(
-        60.015, 30.245, "dadata_suggest",
+        60.015, 30.245, "dadata_verified",
         "г Санкт-Петербург, Комендантский пр-кт, д 53 к 1",
-        "house", 0.99,
-        raw={"_resolver": {"version": RESOLVER_VERSION, "status": "resolved", "score": 0.99}},
+        "verified_house", 0.99,
+        raw={"_resolver": {"version": VERIFICATION_VERSION, "status": VERIFIED, "score": 0.99}},
     )
     fake = FakeGeocoder(fresh)
     monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
@@ -82,14 +82,14 @@ def test_legacy_dadata_cache_is_refreshed(monkeypatch):
     assert report[0]["source"] == "dadata:cache-refresh"
 
 
-def test_old_resolver_version_is_refreshed(monkeypatch):
+def test_old_verification_version_is_refreshed(monkeypatch):
     stale = GeoPoint(
-        60.015, 30.245, "dadata_suggest", "stale", "house", 0.99,
-        raw={"_resolver": {"version": RESOLVER_VERSION - 1, "status": "resolved"}},
+        60.015, 30.245, "dadata_verified", "stale", "verified_house", 0.99,
+        raw={"_resolver": {"version": VERIFICATION_VERSION - 1, "status": VERIFIED}},
     )
     fresh = GeoPoint(
-        60.016, 30.246, "dadata_suggest", "fresh", "house", 0.99,
-        raw={"_resolver": {"version": RESOLVER_VERSION, "status": "resolved", "score": 0.99}},
+        60.016, 30.246, "dadata_verified", "fresh", "verified_house", 0.99,
+        raw={"_resolver": {"version": VERIFICATION_VERSION, "status": VERIFIED, "score": 0.99}},
     )
     fake = FakeGeocoder(fresh)
     monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
@@ -101,3 +101,19 @@ def test_old_resolver_version_is_refreshed(monkeypatch):
     assert fake.calls == 1
     assert store.saved is fresh
     assert report[0]["normalized"] == "fresh"
+
+
+def test_rejected_override_is_not_cached(monkeypatch):
+    rejected = GeoPoint(
+        60.015, 30.245, "dadata_verified", "candidate", "review", 0.20,
+        raw={"_resolver": {"version": VERIFICATION_VERSION, "status": REJECTED}},
+    )
+    fake = FakeGeocoder(rejected)
+    store = FakeStore()
+    monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
+    c = SimpleNamespace(geocoder="dadata", llm_provider="none")
+
+    report = geocode_stops(c, [make_stop()], store, allow_low_confidence=True)
+
+    assert report[0]["resolver_status"] == REJECTED
+    assert store.saved is None
