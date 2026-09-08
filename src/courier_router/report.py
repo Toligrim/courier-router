@@ -18,6 +18,12 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         depot_address,
         "",
     ]
+    if solution.used_soft_windows:
+        lines += [
+            "⚠ Все временные окна одновременно выполнить невозможно.",
+            "Построен лучший найденный маршрут с минимизацией опозданий.",
+            "",
+        ]
     for number, visit in enumerate(solution.visits, start=1):
         s = stops[visit.stop_index]
         op = "ЗАБОР" if s.operation.value == "pickup" else "ОТВОЗ"
@@ -27,6 +33,8 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
             f"   {s.phone}",
             f"   Окно: {s.window.raw if s.window else 'нет'}",
         ]
+        if visit.late_by_min:
+            lines.append(f"   ⚠ Ожидаемое опоздание: {visit.late_by_min} мин")
         if s.payment.raw:
             lines.append(f"   Оплата: {s.payment.raw}")
         if s.access:
@@ -51,8 +59,10 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         f"{round(solution.total_travel_sec/60)} мин движения",
         f"{round(solution.total_service_sec/60)} мин обслуживания",
         f"{round(solution.total_wait_sec/60)} мин ожидания",
-        f"{round(total/60)} мин суммарно без учёта незафиксированных задержек",
     ]
+    if solution.total_late_min:
+        lines.append(f"{solution.total_late_min} мин суммарного опоздания по временным окнам")
+    lines.append(f"{round(total/60)} мин суммарно без учёта незафиксированных задержек")
     return "\n".join(lines) + "\n"
 
 def route_json(stops: list[Stop], solution: RouteSolution, geometry):
@@ -82,6 +92,8 @@ def route_json(stops: list[Stop], solution: RouteSolution, geometry):
             "total_travel_sec": solution.total_travel_sec,
             "total_service_sec": solution.total_service_sec,
             "total_wait_sec": solution.total_wait_sec,
+            "used_soft_windows": solution.used_soft_windows,
+            "total_late_min": solution.total_late_min,
         },
         "visits": [
             {
@@ -90,6 +102,7 @@ def route_json(stops: list[Stop], solution: RouteSolution, geometry):
                 "departure_min": v.departure_min,
                 "travel_sec_from_prev": v.travel_sec_from_prev,
                 "distance_m_from_prev": v.distance_m_from_prev,
+                "late_by_min": v.late_by_min,
                 "stop": stop_obj(stops[v.stop_index]),
             }
             for n,v in enumerate(solution.visits, 1)
