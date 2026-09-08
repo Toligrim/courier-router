@@ -87,6 +87,18 @@ def _same_address(clean: dict, suggest: dict) -> tuple[bool, list[str]]:
     return same, reasons or ["component_crosscheck_match"]
 
 
+def _score_suggestion_components(query: str, suggestion: dict, clean: dict) -> tuple[float, list[str], bool]:
+    scoring = dict(suggestion)
+    clean_coord = _coord(clean)
+    if _coord(scoring) is None and clean_coord is not None:
+        # Suggestions may omit coordinates depending on response/tariff. Coordinates
+        # are not needed to prove candidate identity; Clean remains the authority for
+        # qc_geo. Inject only for component scoring so a missing optional field does
+        # not suppress an otherwise exact FIAS/GAR match.
+        scoring["geo_lat"], scoring["geo_lon"] = clean_coord
+    return score_dadata_candidate(query, scoring)
+
+
 def evaluate_verification(query: str, clean: dict, best_suggestion: dict | None) -> VerificationDecision:
     reasons: list[str] = []
     clean_score, clean_reasons, strong_mismatch = score_dadata_candidate(query, clean)
@@ -109,7 +121,7 @@ def evaluate_verification(query: str, clean: dict, best_suggestion: dict | None)
     if best_suggestion is None:
         return VerificationDecision(REVIEW, min(0.79, max(0.45, clean_score)), reasons + ["suggestion_crosscheck_missing"])
 
-    suggest_score, suggest_reasons, suggest_mismatch = score_dadata_candidate(query, best_suggestion)
+    suggest_score, suggest_reasons, suggest_mismatch = _score_suggestion_components(query, best_suggestion, clean)
     if suggest_mismatch:
         return VerificationDecision(REJECTED, 0.20, reasons + suggest_reasons + ["suggestion_component_mismatch"])
 
@@ -118,6 +130,8 @@ def evaluate_verification(query: str, clean: dict, best_suggestion: dict | None)
     reasons.extend(cross_reasons)
     if distance is not None:
         reasons.append(f"crosscheck_distance_m:{round(distance)}")
+    else:
+        reasons.append("suggestion_coordinates_not_required")
 
     if not same:
         return VerificationDecision(REJECTED, 0.20, reasons + ["clean_suggest_disagree"], distance)
@@ -158,22 +172,20 @@ class VerifiedDaDataGeocoder:
 
     def geocode(self, address: str, district: str = "") -> GeoPoint:
         query = normalize_address_input(address, district)
+        clean = self.backend._clean(query)
         suggestions = self.backend._suggest(query, count=5)
         ranked: list[tuple[float, bool, list[str], dict, dict]] = []
         for item in suggestions:
             data = item.get("data") or {}
-            if _coord(data) is None:
-                continue
-            score, reasons, mismatch = score_dadata_candidate(query, data)
+            score, reasons, mismatch = _score_suggestion_components(query, data, clean)
             ranked.append((score, mismatch, reasons, item, data))
         ranked.sort(key=lambda x: x[0], reverse=True)
         best_data = ranked[0][4] if ranked else None
 
-        clean = self.backend._clean(query)
         decision = evaluate_verification(query, clean, best_data)
 
         chosen = clean if _coord(clean) is not None else best_data
-        if chosen is None:
+        if chosen is None or _coord(chosen) is None:
             raise ValueError(f"DaData не вернула координаты: {address}")
 
         resolver = {
