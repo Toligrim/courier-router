@@ -25,8 +25,13 @@ def parse_window(value: object) -> TimeWindow | None:
     m = WINDOW_RE.search(s)
     if not m:
         raise ValueError(f"Не удалось разобрать временное окно: {s!r}")
-    a = int(m["h1"]) * 60 + int(m["m1"])
-    b = int(m["h2"]) * 60 + int(m["m2"])
+    h1, m1, h2, m2 = int(m["h1"]), int(m["m1"]), int(m["h2"]), int(m["m2"])
+    if not (0 <= h1 <= 23 and 0 <= m1 <= 59):
+        raise ValueError(f"Некорректное начало временного окна: {s!r}")
+    if not (0 <= h2 <= 24 and 0 <= m2 <= 59) or (h2 == 24 and m2 != 0):
+        raise ValueError(f"Некорректный конец временного окна: {s!r}")
+    a = h1 * 60 + m1
+    b = h2 * 60 + m2
     if b < a:
         raise ValueError(f"Окно заканчивается раньше начала: {s!r}")
     return TimeWindow(a, b, s)
@@ -41,10 +46,10 @@ def parse_payment(value: object) -> Payment:
         return Payment(amount_rub=0, method="free", raw=s)
     m = MONEY_RE.search(low.replace("\xa0", " "))
     amount = int(re.sub(r"\s+", "", m["amount"])) if m else None
-    if "нал" in low:
-        method = "cash"
-    elif "перев" in low or "кар" in low:
+    if "безнал" in low or "перев" in low or "кар" in low:
         method = "transfer"
+    elif "нал" in low:
+        method = "cash"
     else:
         method = "unknown"
     return Payment(amount_rub=amount, method=method, raw=s)
@@ -112,7 +117,6 @@ def read_csv(path: str | Path, default_service_min: int = 10) -> list[Stop]:
         dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
         reader = csv.reader(text.splitlines(), dialect)
     except csv.Error:
-        # не трогаем csv.excel (это класс, правка delimiter на нём глобальна)
         reader = csv.reader(text.splitlines(), delimiter=";")
     return _rows_to_stops(reader, default_service_min)
 
