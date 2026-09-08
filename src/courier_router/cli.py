@@ -82,18 +82,31 @@ def cmd_geocode_depot(args):
     }, ensure_ascii=False, indent=2))
 
 
+def _resolver_meta(geo) -> dict:
+    raw = getattr(geo, "raw", None)
+    if not isinstance(raw, dict):
+        return {}
+    value = raw.get("_resolver")
+    return value if isinstance(value, dict) else {}
+
+
 def geocode_stops(c, stops, store, allow_low_confidence=False):
     g = get_geocoder(c)
     report = []
     for s in stops:
         cached = store.get_geocode(s.address_raw, s.district)
-        if cached:
+        # Cache rows created by the old one-shot DaData cleaner have no resolver metadata.
+        # Re-resolve them once so historical bad matches do not survive this upgrade.
+        legacy_dadata_cache = bool(
+            cached and c.geocoder == "dadata" and cached.provider == "dadata" and not _resolver_meta(cached)
+        )
+        if cached and not legacy_dadata_cache:
             s.geo = cached
             source = "cache"
         else:
             try:
                 s.geo = g.geocode(s.address_raw, s.district)
-                source = c.geocoder
+                source = c.geocoder if not legacy_dadata_cache else f"{c.geocoder}:cache-refresh"
             except Exception as first:
                 if c.llm_provider == "none":
                     raise RuntimeError(f"Строка {s.source_row}, адрес {s.address_raw!r}: {first}") from first
@@ -102,6 +115,18 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 s.warnings.append("Адрес потребовал LLM-нормализацию")
                 source = f"{c.geocoder}+{c.llm_provider}"
             store.put_geocode(s.address_raw, s.district, s.geo)
+
+        resolver = _resolver_meta(s.geo)
+        resolver_status = resolver.get("status")
+        if resolver_status == "strong_mismatch":
+            candidate_values = [x.get("value") for x in resolver.get("candidates", []) if x.get("value")]
+            hint = f" Лучшие варианты: {'; '.join(candidate_values[:3])}" if candidate_values else ""
+            s.warnings.append("Сильное расхождение исходного и найденного адреса")
+            if not allow_low_confidence:
+                raise RuntimeError(
+                    f"Строка {s.source_row}: найденный адрес сильно расходится с исходным. "
+                    f"Исходный: {s.address_raw!r}. Найдено: {s.geo.normalized_address!r}.{hint}"
+                )
 
         outside_expected_area = not (58.2 <= s.geo.lat <= 61.7 and 26.5 <= s.geo.lon <= 36.5)
         if outside_expected_area:
@@ -112,10 +137,10 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                     f"{s.geo.lat}, {s.geo.lon}"
                 )
 
-        requires_review = s.geo.confidence < 0.80
+        requires_review = s.geo.confidence < 0.80 or resolver_status in {"review", "strong_mismatch"}
         if requires_review:
             s.warnings.append(
-                f"Низкая точность геокодирования ({s.geo.confidence:.2f}, {s.geo.precision}) — "
+                f"Геокодирование требует проверки ({s.geo.confidence:.2f}, {s.geo.precision}) — "
                 "проверьте точку на карте"
             )
 
@@ -125,6 +150,11 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "precision": s.geo.precision, "confidence": s.geo.confidence, "source": source,
             "requires_review": requires_review,
             "outside_expected_area": outside_expected_area,
+            "resolver_status": resolver_status,
+            "resolver_score": resolver.get("score"),
+            "resolver_reasons": resolver.get("reasons", []),
+            "resolver_query": resolver.get("query"),
+            "resolver_candidates": resolver.get("candidates", []),
         })
     return report
 
@@ -185,7 +215,7 @@ def build_parser():
     plan.add_argument("--output", required=True)
     plan.add_argument(
         "--allow-low-confidence", action="store_true",
-        help="Разрешить также координаты вне ожидаемой зоны СПб/Ленобласти",
+        help="Явно разрешить сильные расхождения адресов и координаты вне ожидаемой зоны",
     )
     plan.set_defaults(func=cmd_plan)
     return p
