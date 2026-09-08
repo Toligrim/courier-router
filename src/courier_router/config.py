@@ -19,7 +19,7 @@ class Config:
     geocoder: str = os.getenv("GEOCODER", "dadata").lower()
     router: str = os.getenv("ROUTER", "ors").lower()
     db_path: str = os.getenv("DB_PATH", "data/cache/courier-router.db")
-    depot_address: str = os.getenv("DEPOT_ADDRESS", "проспект Костюшко, 2, Санкт-Петербург")
+    depot_address: str = os.getenv("DEPOT_ADDRESS", "ул Костюшко, д 2, Санкт-Петербург")
     depot_lat: str = os.getenv("DEPOT_LAT", "")
     depot_lon: str = os.getenv("DEPOT_LON", "")
     default_service_min: int = int(os.getenv("DEFAULT_SERVICE_MIN", "10"))

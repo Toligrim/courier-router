@@ -19,11 +19,10 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         "",
     ]
     if solution.used_soft_windows:
-        lines += [
-            "⚠ Все временные окна одновременно выполнить невозможно.",
-            "Построен лучший найденный маршрут с минимизацией опозданий.",
-            "",
-        ]
+        lines.append("⚠ Маршрут построен в best-effort режиме по временным окнам.")
+        if solution.warnings:
+            lines.extend(f"⚠ {warning}" for warning in solution.warnings)
+        lines.append("")
     for number, visit in enumerate(solution.visits, start=1):
         s = stops[visit.stop_index]
         op = "ЗАБОР" if s.operation.value == "pickup" else "ОТВОЗ"
@@ -94,6 +93,7 @@ def route_json(stops: list[Stop], solution: RouteSolution, geometry):
             "total_wait_sec": solution.total_wait_sec,
             "used_soft_windows": solution.used_soft_windows,
             "total_late_min": solution.total_late_min,
+            "solver_status": solution.solver_status,
         },
         "visits": [
             {

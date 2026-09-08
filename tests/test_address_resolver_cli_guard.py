@@ -4,6 +4,7 @@ import pytest
 
 from courier_router.cli import geocode_stops
 from courier_router.domain import GeoPoint, Operation, Payment, Stop
+from courier_router.geocode import RESOLVER_VERSION
 
 
 class FakeStore:
@@ -47,14 +48,17 @@ def test_strong_mismatch_blocks_without_override(monkeypatch):
         59.9, 29.1, "dadata_clean",
         "Ленинградская обл, г Сосновый Бор, СНТ Приморский, д 53 к 1",
         "settlement", 0.30,
-        raw={"_resolver": {"status": "strong_mismatch", "candidates": []}},
+        raw={"_resolver": {"version": RESOLVER_VERSION, "status": "strong_mismatch", "candidates": []}},
     )
     fake = FakeGeocoder(geo)
+    store = FakeStore()
     monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
     c = SimpleNamespace(geocoder="dadata", llm_provider="none")
 
     with pytest.raises(RuntimeError, match="сильно расходится"):
-        geocode_stops(c, [make_stop()], FakeStore(), allow_low_confidence=False)
+        geocode_stops(c, [make_stop()], store, allow_low_confidence=False)
+
+    assert store.saved is None
 
 
 def test_legacy_dadata_cache_is_refreshed(monkeypatch):
@@ -63,7 +67,7 @@ def test_legacy_dadata_cache_is_refreshed(monkeypatch):
         60.015, 30.245, "dadata_suggest",
         "г Санкт-Петербург, Комендантский пр-кт, д 53 к 1",
         "house", 0.99,
-        raw={"_resolver": {"status": "resolved", "score": 0.99}},
+        raw={"_resolver": {"version": RESOLVER_VERSION, "status": "resolved", "score": 0.99}},
     )
     fake = FakeGeocoder(fresh)
     monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
@@ -76,3 +80,24 @@ def test_legacy_dadata_cache_is_refreshed(monkeypatch):
     assert store.saved is fresh
     assert report[0]["normalized"].startswith("г Санкт-Петербург")
     assert report[0]["source"] == "dadata:cache-refresh"
+
+
+def test_old_resolver_version_is_refreshed(monkeypatch):
+    stale = GeoPoint(
+        60.015, 30.245, "dadata_suggest", "stale", "house", 0.99,
+        raw={"_resolver": {"version": RESOLVER_VERSION - 1, "status": "resolved"}},
+    )
+    fresh = GeoPoint(
+        60.016, 30.246, "dadata_suggest", "fresh", "house", 0.99,
+        raw={"_resolver": {"version": RESOLVER_VERSION, "status": "resolved", "score": 0.99}},
+    )
+    fake = FakeGeocoder(fresh)
+    monkeypatch.setattr("courier_router.cli.get_geocoder", lambda c: fake)
+    c = SimpleNamespace(geocoder="dadata", llm_provider="none")
+    store = FakeStore(stale)
+
+    report = geocode_stops(c, [make_stop()], store)
+
+    assert fake.calls == 1
+    assert store.saved is fresh
+    assert report[0]["normalized"] == "fresh"

@@ -7,6 +7,8 @@ DAY = 24 * 60
 UNREACHABLE_DURATION_SEC = 37 * 3600
 UNREACHABLE_DISTANCE_M = 1_000_000_000
 SOFT_LATE_PENALTY_PER_SEC = 20
+ROUTING_FAIL_TIMEOUT = 4
+ROUTING_INFEASIBLE = 6
 
 
 def _normalize_matrix(matrix, size: int, unreachable_value: int, name: str) -> list[list[int]]:
@@ -100,8 +102,9 @@ def _solve_once(
     params.time_limit.seconds = int(time_limit_sec)
 
     sol = routing.SolveWithParameters(params)
+    solver_status = int(routing.status())
     if not sol:
-        return RouteSolution([], 0, 0, 0, 0, feasible=False)
+        return RouteSolution([], 0, 0, 0, 0, feasible=False, solver_status=solver_status)
 
     visits = []
     idx = routing.Start(0)
@@ -146,24 +149,36 @@ def _solve_once(
         total_late_min += late_by_min
         idx = next_idx
 
-    warnings = []
-    if soft_windows:
-        late_visits = [v for v in visits if v.late_by_min > 0]
-        warnings.append("Все временные окна одновременно выполнить невозможно — построен маршрут с минимизацией опозданий")
-        for visit in late_visits:
-            stop = stops[visit.stop_index]
-            warnings.append(f"Заказ №{stop.order_no}: ожидаемое опоздание {visit.late_by_min} мин")
-
     return RouteSolution(
         visits=visits,
         total_distance_m=total_distance,
         total_travel_sec=total_travel,
         total_service_sec=total_service,
         total_wait_sec=total_wait,
-        warnings=warnings,
         used_soft_windows=soft_windows,
         total_late_min=total_late_min,
+        solver_status=solver_status,
     )
+
+
+def _soft_fallback_warnings(strict: RouteSolution, soft: RouteSolution, stops: list[Stop]) -> list[str]:
+    if strict.solver_status == ROUTING_INFEASIBLE:
+        warnings = [
+            "Все временные окна одновременно выполнить невозможно — построен маршрут со штрафом за опоздания"
+        ]
+    elif strict.solver_status == ROUTING_FAIL_TIMEOUT:
+        warnings = [
+            "Строгий поиск маршрута не успел найти решение за отведённое время — показан best-effort маршрут со штрафом за опоздания"
+        ]
+    else:
+        warnings = [
+            "Строгий маршрут с соблюдением всех окон не найден — показан best-effort маршрут со штрафом за опоздания"
+        ]
+    for visit in soft.visits:
+        if visit.late_by_min > 0:
+            stop = stops[visit.stop_index]
+            warnings.append(f"Заказ №{stop.order_no}: ожидаемое опоздание {visit.late_by_min} мин")
+    return warnings
 
 
 def solve_single_vehicle(
@@ -178,8 +193,9 @@ def solve_single_vehicle(
     """
     Matrix nodes: 0=depot, 1..N=stops.
 
-    First tries strict time windows. If no feasible solution exists, optionally retries
-    with hard lower bounds and soft upper bounds, heavily penalizing lateness.
+    First tries strict time windows. If no solution is found, optionally retries with
+    hard lower bounds and soft upper bounds. Solver timeout is kept distinct from a
+    proven infeasible model so reports do not claim impossibility without evidence.
     """
     n_real = len(stops) + 1
     dur = _normalize_matrix(durations, n_real, UNREACHABLE_DURATION_SEC, "duration")
@@ -192,10 +208,12 @@ def solve_single_vehicle(
     if fallback_to_soft_windows:
         soft = _solve_once(stops, dur, dist, depart_min, end_mode, time_limit_sec, soft_windows=True)
         if soft.feasible:
+            soft.warnings = _soft_fallback_warnings(strict, soft, stops)
             return soft
 
     return RouteSolution(
         [], 0, 0, 0, 0,
         feasible=False,
         warnings=["Маршрут не найден даже после смягчения временных окон"],
+        solver_status=strict.solver_status,
     )

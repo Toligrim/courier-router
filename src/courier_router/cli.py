@@ -3,7 +3,7 @@ import argparse, json, os, platform, sys
 from pathlib import Path
 from .config import Config
 from .domain import GeoPoint
-from .geocode import DaDataGeocoder, PublicNominatimGeocoder
+from .geocode import DaDataGeocoder, PublicNominatimGeocoder, RESOLVER_VERSION
 from .llm import clean_with_openai, clean_with_anthropic
 from .optimizer import solve_single_vehicle
 from .parsing import read_table
@@ -15,7 +15,10 @@ from .storage import Storage
 
 def minutes(s: str) -> int:
     h,m = s.split(":")
-    return int(h)*60 + int(m)
+    h, m = int(h), int(m)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"Некорректное время старта: {s!r}")
+    return h*60 + m
 
 
 def get_geocoder(c: Config):
@@ -90,23 +93,29 @@ def _resolver_meta(geo) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _cache_matches_geocoder(c, cached) -> bool:
+    if not cached:
+        return False
+    provider = str(getattr(cached, "provider", ""))
+    if c.geocoder == "dadata":
+        resolver = _resolver_meta(cached)
+        return provider in {"dadata_suggest", "dadata_clean"} and resolver.get("version") == RESOLVER_VERSION
+    return provider == c.geocoder
+
+
 def geocode_stops(c, stops, store, allow_low_confidence=False):
     g = get_geocoder(c)
     report = []
     for s in stops:
         cached = store.get_geocode(s.address_raw, s.district)
-        # Cache rows created by the old one-shot DaData cleaner have no resolver metadata.
-        # Re-resolve them once so historical bad matches do not survive this upgrade.
-        legacy_dadata_cache = bool(
-            cached and c.geocoder == "dadata" and cached.provider == "dadata" and not _resolver_meta(cached)
-        )
-        if cached and not legacy_dadata_cache:
+        cache_valid = _cache_matches_geocoder(c, cached)
+        if cached and cache_valid:
             s.geo = cached
             source = "cache"
         else:
             try:
                 s.geo = g.geocode(s.address_raw, s.district)
-                source = c.geocoder if not legacy_dadata_cache else f"{c.geocoder}:cache-refresh"
+                source = c.geocoder if not cached else f"{c.geocoder}:cache-refresh"
             except Exception as first:
                 if c.llm_provider == "none":
                     raise RuntimeError(f"Строка {s.source_row}, адрес {s.address_raw!r}: {first}") from first
@@ -114,7 +123,6 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 s.geo = g.geocode(cleaned, s.district)
                 s.warnings.append("Адрес потребовал LLM-нормализацию")
                 source = f"{c.geocoder}+{c.llm_provider}"
-            store.put_geocode(s.address_raw, s.district, s.geo)
 
         resolver = _resolver_meta(s.geo)
         resolver_status = resolver.get("status")
@@ -144,6 +152,11 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 "проверьте точку на карте"
             )
 
+        # Cache only after all blocking validation has passed. This prevents a failed
+        # route build from poisoning subsequent runs with the rejected coordinate.
+        if not cache_valid:
+            store.put_geocode(s.address_raw, s.district, s.geo)
+
         report.append({
             "row": s.source_row, "order_no": s.order_no, "raw": s.address_raw,
             "normalized": s.geo.normalized_address, "lat": s.geo.lat, "lon": s.geo.lon,
@@ -151,6 +164,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "requires_review": requires_review,
             "outside_expected_area": outside_expected_area,
             "resolver_status": resolver_status,
+            "resolver_version": resolver.get("version"),
             "resolver_score": resolver.get("score"),
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
