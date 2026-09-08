@@ -41,7 +41,15 @@ def normalize_address_input(address: str, district: str = "") -> str:
     text = re.sub(r"\s*[,;]+\s*", ", ", text)
     text = re.sub(r",\s*,+", ", ", text)
     text = text.strip(" ,")
-    if district and _norm_text(district) not in _norm_text(text):
+    # Колонка "район" в курьерских таблицах — это зона курьера, а не всегда реальный
+    # административный район. Подставляем её в запрос только если в адресе нет своего
+    # маркера населённого пункта/региона (иначе ломается геокодирование, напр.
+    # "Красносельский, Ленинградская обл, ... деревня Пески" → DaData 0 кандидатов).
+    has_locality = re.search(
+        r"санкт-?петербург|ленинградск|\bгород\b|\bг\.?\s|\bдеревня\b|\bсел[оа]\b|\bпос[её]лок\b|\bпгт\b|\bдер\.?\s|\bпос\.?\s",
+        text, re.I,
+    )
+    if district and not has_locality and _norm_text(district) not in _norm_text(text):
         text = f"{district}, {text}"
     return text
 
@@ -151,15 +159,17 @@ def _score_locality(source: str, data: dict) -> tuple[float, list[str], bool]:
 
     # If the source explicitly names a city/settlement, require that named locality
     # to be present in the candidate locality. Skip Saint Petersburg because it is
-    # handled above.
+    # handled above. Match on the original comma-bearing string, not the
+    # comma-stripped _norm_text output, so "^|,\s*" actually anchors to a boundary
+    # and "г Санкт-Петербург, <улица>" is not misread as a named locality.
     m = re.search(
-        r"(?:^|,\s*)(?:г|город|деревня|д|поселок|посёлок|п|село|с)\.?\s+([а-яa-z -]{3,})",
-        normalized, re.I,
+        r"(?:^|,)\s*(?:г|город|деревня|дер|поселок|посёлок|пос|село)\.?\s+([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z -]{2,})",
+        source, re.I,
     )
     if m:
         named = _norm_text(m.group(1)).strip()
-        named = re.split(r"\s+(?:ул|улица|пр|проспект|наб|ш|пер)\b", named, maxsplit=1)[0].strip()
-        if named and named != "санкт петербург":
+        named = re.split(r"\s+(?:ул|улица|пр|проспект|наб|ш|шоссе|пер|переулок|б-р|линия)\b", named, maxsplit=1)[0].strip()
+        if named and "санкт петербург" not in named:
             if named in locality:
                 score += 0.15
                 reasons.append("locality_match")
@@ -275,12 +285,18 @@ def _resolver_payload(status: str, address: str, query: str, score: float, reaso
     }
 
 
+def _clean_failure_reason(exc: Exception) -> str:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"clean_http_{status}" if status else "clean_unavailable"
+
+
 class DaDataGeocoder:
-    def __init__(self, token: str, secret: str, timeout: float = 20):
+    def __init__(self, token: str, secret: str, timeout: float = 20, use_clean: bool = True):
         if not token or not secret:
             raise RuntimeError("Для DaData нужны DADATA_TOKEN и DADATA_SECRET")
         self.token = token
         self.secret = secret
+        self.use_clean = use_clean
         self.client = httpx.Client(timeout=timeout)
 
     def _suggest(self, query: str, count: int = 5) -> list[dict]:
@@ -338,30 +354,49 @@ class DaDataGeocoder:
                 chosen = best
                 status = "resolved"
 
+        degraded_reason: str | None = None
         if chosen is None:
-            data = self._clean(query)
-            if data.get("geo_lat") is None or data.get("geo_lon") is None:
-                raise ValueError(f"DaData не вернула координаты: {address}")
-            score, reasons, strong_mismatch = score_dadata_candidate(query, data)
-            precision = _precision_from_data(data)
-            qc = int(data.get("qc_geo") if data.get("qc_geo") is not None else 5)
-            qc_conf = QC_CONF.get(qc, ("unknown", 0.30))[1]
-            confidence = min(qc_conf, max(0.30, score))
-            status = "strong_mismatch" if strong_mismatch else "review"
-            raw = dict(data)
-            raw["_resolver"] = _resolver_payload(status, address, query, score, reasons, margin, ranked)
-            return GeoPoint(
-                lat=float(data["geo_lat"]),
-                lon=float(data["geo_lon"]),
-                provider="dadata_clean",
-                normalized_address=data.get("result") or query,
-                precision=precision,
-                confidence=confidence,
-                provider_ref=data.get("fias_id"),
-                raw=raw,
-            )
+            clean_data = None
+            if self.use_clean:
+                try:
+                    clean_data = self._clean(query)
+                except httpx.HTTPError as exc:
+                    degraded_reason = _clean_failure_reason(exc)
+            else:
+                degraded_reason = "clean_disabled"
+
+            if clean_data and clean_data.get("geo_lat") is not None and clean_data.get("geo_lon") is not None:
+                data = clean_data
+                score, reasons, strong_mismatch = score_dadata_candidate(query, data)
+                qc = int(data.get("qc_geo") if data.get("qc_geo") is not None else 5)
+                qc_conf = QC_CONF.get(qc, ("unknown", 0.30))[1]
+                confidence = min(qc_conf, max(0.30, score))
+                status = "strong_mismatch" if strong_mismatch else "review"
+                raw = dict(data)
+                raw["_resolver"] = _resolver_payload(status, address, query, score, reasons, margin, ranked)
+                return GeoPoint(
+                    lat=float(data["geo_lat"]),
+                    lon=float(data["geo_lon"]),
+                    provider="dadata_clean",
+                    normalized_address=data.get("result") or query,
+                    precision=_precision_from_data(data),
+                    confidence=confidence,
+                    provider_ref=data.get("fias_id"),
+                    raw=raw,
+                )
+
+            # Clean tier unavailable (disabled for the token, quota, network) or empty:
+            # fall back to the best Suggestions candidate so one missing tier does not
+            # abort the whole route. Such a point is flagged for manual review.
+            if not ranked:
+                detail = f" ({degraded_reason})" if degraded_reason else ""
+                raise ValueError(f"DaData не вернула адрес: {address}{detail}")
+            chosen = ranked[0]
+            status = "strong_mismatch" if chosen[1] else "review"
 
         score, _, reasons, item, data = chosen
+        if degraded_reason:
+            reasons = list(reasons) + [degraded_reason]
         raw = dict(data)
         raw["_resolver"] = _resolver_payload(status, address, query, score, reasons, margin, ranked)
         return GeoPoint(
