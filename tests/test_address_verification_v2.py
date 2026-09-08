@@ -108,6 +108,20 @@ def test_missing_house_is_rejected_for_courier_delivery():
     assert "qc_complete_4" in decision.reasons
 
 
+def test_fias_match_can_verify_when_suggestion_omits_coordinates():
+    candidate = suggestion(geo_lat=None, geo_lon=None)
+    decision = evaluate_verification(
+        "Санкт-Петербург, ул Савушкина, д 15",
+        clean_address(),
+        candidate,
+    )
+
+    assert decision.status == VERIFIED
+    assert decision.distance_m is None
+    assert "house_fias_id_match" in decision.reasons
+    assert "suggestion_coordinates_not_required" in decision.reasons
+
+
 def test_verified_geocoder_persists_quality_and_fias_metadata(monkeypatch):
     geocoder = VerifiedDaDataGeocoder("token", "secret")
     clean = clean_address()
