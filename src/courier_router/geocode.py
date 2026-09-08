@@ -8,6 +8,8 @@ import httpx
 
 from .domain import GeoPoint
 
+RESOLVER_VERSION = 2
+
 QC_CONF = {
     0: ("exact", 0.99),
     1: ("nearest_house", 0.90),
@@ -45,13 +47,50 @@ def normalize_address_input(address: str, district: str = "") -> str:
 
 
 def _extract_house(source: str) -> str | None:
-    m = re.search(r"(?:^|[ ,])(?:д|дом)\.?\s*([0-9]+[а-яa-z]?(?:/[0-9]+)?)\b", source, re.I)
-    return _norm_text(m.group(1)) if m else None
+    explicit = re.search(r"(?:^|[ ,])(?:д|дом)\.?\s*([0-9]+[а-яa-z]?(?:/[0-9]+)?)\b", source, re.I)
+    if explicit:
+        return _norm_text(explicit.group(1))
+
+    # Courier spreadsheets often contain a compact form like "Савушкина 15".
+    # Strip apartment/office/structure values first, then accept a single remaining
+    # standalone number as the house number. Ambiguous numeric street names are left
+    # unresolved rather than guessed.
+    cleaned = re.sub(
+        r"(?:^|[ ,])(?:кв|квартира|офис|пом|помещение|к|корп|корпус|лит|литера|стр|строение)\.?\s*[0-9а-яa-z/-]+",
+        " ", source, flags=re.I,
+    )
+    numbers = re.findall(r"(?<![-\w])([0-9]+[а-яa-z]?(?:/[0-9]+)?)(?![-\w])", cleaned, re.I)
+    normalized = [_norm_text(x) for x in numbers]
+    return normalized[0] if len(normalized) == 1 else None
 
 
 def _extract_block(source: str) -> str | None:
     m = re.search(r"(?:^|[ ,])(?:к|корп|корпус)\.?\s*([0-9]+[а-яa-z]?)\b", source, re.I)
     return _norm_text(m.group(1)) if m else None
+
+
+def _extract_structure(source: str) -> tuple[str, str] | None:
+    m = re.search(
+        r"(?:^|[ ,])(?P<kind>лит(?:ера)?|стр(?:оение)?)\.?\s*(?P<value>[0-9а-яa-z]+)\b",
+        source, re.I,
+    )
+    if not m:
+        return None
+    kind = _norm_text(m.group("kind"))
+    kind = "лит" if kind.startswith("лит") else "стр"
+    return kind, _norm_text(m.group("value"))
+
+
+def _candidate_structure(data: dict) -> tuple[str, str] | None:
+    value = _norm_text(data.get("block"))
+    if not value:
+        return None
+    kind = _norm_text(data.get("block_type") or data.get("block_type_full"))
+    if kind.startswith("лит"):
+        return "лит", value
+    if kind.startswith("стр"):
+        return "стр", value
+    return None
 
 
 def _street_tokens(value: str | None) -> set[str]:
@@ -63,45 +102,36 @@ def _has_street_marker(source: str) -> bool:
     return bool(re.search(r"(?:^|[ ,])(?:ул|улица|пр-?кт|проспект|наб|набережная|ш|шоссе|пер|переулок)\.?\s", source, re.I))
 
 
-def _explicit_spb(source: str) -> bool:
-    value = _norm_text(source)
-    return "санкт петербург" in value
-
-
 def _candidate_locality(data: dict) -> str:
-    return " ".join(
-        str(data.get(key) or "")
-        for key in ("region", "city", "settlement")
-    )
+    return " ".join(str(data.get(key) or "") for key in ("region", "city", "settlement"))
 
 
 def _street_similarity(source: str, street: str | None) -> float:
     candidate = _street_tokens(street)
     if not candidate:
         return 0.0
-    source_tokens = set(_norm_text(source).split())
+    source_tokens = _street_tokens(source)
     if candidate <= source_tokens:
         return 1.0
-    best = 0.0
-    for left in candidate:
-        for right in source_tokens:
-            best = max(best, SequenceMatcher(None, left, right).ratio())
-    return best
+
+    # Score every candidate token, not only the single best token pair. This avoids
+    # treating "Малая Морская" and "Большая Морская" as identical merely because
+    # the word "Морская" matches exactly.
+    scores = []
+    for token in candidate:
+        best = max((SequenceMatcher(None, token, src).ratio() for src in source_tokens), default=0.0)
+        scores.append(best)
+    return sum(scores) / len(scores)
 
 
-def score_dadata_candidate(source: str, data: dict) -> tuple[float, list[str], bool]:
-    """Score address components, not only DaData's coarse qc_geo value."""
-    score = 0.15
+def _score_locality(source: str, data: dict) -> tuple[float, list[str], bool]:
+    normalized = _norm_text(source)
+    locality = _norm_text(_candidate_locality(data))
     reasons: list[str] = []
+    score = 0.0
     strong_mismatch = False
 
-    source_house = _extract_house(source)
-    source_block = _extract_block(source)
-    candidate_house = _norm_text(data.get("house")) or None
-    candidate_block = _norm_text(data.get("block")) or None
-
-    if _explicit_spb(source):
-        locality = _norm_text(_candidate_locality(data))
+    if "санкт петербург" in normalized:
         if "санкт петербург" in locality:
             score += 0.25
             reasons.append("city_match")
@@ -110,6 +140,55 @@ def score_dadata_candidate(source: str, data: dict) -> tuple[float, list[str], b
             reasons.append("city_mismatch")
             strong_mismatch = True
 
+    if "ленинградская область" in normalized or "ленинградская обл" in normalized:
+        if "ленинградск" in locality:
+            score += 0.20
+            reasons.append("region_match")
+        else:
+            score -= 0.55
+            reasons.append("region_mismatch")
+            strong_mismatch = True
+
+    # If the source explicitly names a city/settlement, require that named locality
+    # to be present in the candidate locality. Skip Saint Petersburg because it is
+    # handled above.
+    m = re.search(
+        r"(?:^|,\s*)(?:г|город|деревня|д|поселок|посёлок|п|село|с)\.?\s+([а-яa-z -]{3,})",
+        normalized, re.I,
+    )
+    if m:
+        named = _norm_text(m.group(1)).strip()
+        named = re.split(r"\s+(?:ул|улица|пр|проспект|наб|ш|пер)\b", named, maxsplit=1)[0].strip()
+        if named and named != "санкт петербург":
+            if named in locality:
+                score += 0.15
+                reasons.append("locality_match")
+            else:
+                score -= 0.45
+                reasons.append("locality_mismatch")
+                strong_mismatch = True
+
+    return score, reasons, strong_mismatch
+
+
+def score_dadata_candidate(source: str, data: dict) -> tuple[float, list[str], bool]:
+    """Score address components, not only DaData's coarse qc_geo value."""
+    score = 0.15
+    reasons: list[str] = []
+    strong_mismatch = False
+
+    locality_score, locality_reasons, locality_mismatch = _score_locality(source, data)
+    score += locality_score
+    reasons.extend(locality_reasons)
+    strong_mismatch |= locality_mismatch
+
+    source_house = _extract_house(source)
+    source_block = _extract_block(source)
+    source_structure = _extract_structure(source)
+    candidate_house = _norm_text(data.get("house")) or None
+    candidate_block = _norm_text(data.get("block")) or None
+    candidate_structure = _candidate_structure(data)
+
     street_similarity = _street_similarity(source, data.get("street"))
     if street_similarity >= 0.95:
         score += 0.35
@@ -117,7 +196,7 @@ def score_dadata_candidate(source: str, data: dict) -> tuple[float, list[str], b
     elif street_similarity >= 0.82:
         score += 0.22
         reasons.append("street_fuzzy_match")
-    elif _has_street_marker(source):
+    elif _has_street_marker(source) or data.get("street"):
         score -= 0.30
         reasons.append("street_mismatch")
 
@@ -141,6 +220,18 @@ def score_dadata_candidate(source: str, data: dict) -> tuple[float, list[str], b
             score -= 0.15
             reasons.append("block_mismatch")
 
+    if source_structure:
+        if candidate_structure == source_structure:
+            score += 0.08
+            reasons.append("structure_match")
+        elif candidate_structure:
+            score -= 0.18
+            reasons.append("structure_mismatch")
+            strong_mismatch = True
+        else:
+            score -= 0.08
+            reasons.append("structure_missing")
+
     if data.get("geo_lat") is None or data.get("geo_lon") is None:
         score -= 0.50
         reasons.append("coordinates_missing")
@@ -163,6 +254,27 @@ def _precision_from_data(data: dict) -> str:
     return "unknown"
 
 
+def _resolver_payload(status: str, address: str, query: str, score: float, reasons: list[str], margin: float | None, ranked: list) -> dict:
+    return {
+        "version": RESOLVER_VERSION,
+        "status": status,
+        "input": address,
+        "query": query,
+        "score": round(score, 3),
+        "reasons": reasons,
+        "suggestion_margin": None if margin is None else round(margin, 3),
+        "candidates": [
+            {
+                "value": item.get("value"),
+                "score": round(s, 3),
+                "strong_mismatch": mismatch,
+                "reasons": why,
+            }
+            for s, mismatch, why, item, _ in ranked[:5]
+        ],
+    }
+
+
 class DaDataGeocoder:
     def __init__(self, token: str, secret: str, timeout: float = 20):
         if not token or not secret:
@@ -176,7 +288,7 @@ class DaDataGeocoder:
         normalized = _norm_text(query)
         if "санкт петербург" in normalized:
             payload["locations_boost"] = [{"city": "Санкт-Петербург"}]
-        elif "ленинградская область" in normalized:
+        elif "ленинградская область" in normalized or "ленинградская обл" in normalized:
             payload["locations_boost"] = [{"region": "Ленинградская"}]
         r = self.client.post(
             "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address",
@@ -237,23 +349,7 @@ class DaDataGeocoder:
             confidence = min(qc_conf, max(0.30, score))
             status = "strong_mismatch" if strong_mismatch else "review"
             raw = dict(data)
-            raw["_resolver"] = {
-                "status": status,
-                "input": address,
-                "query": query,
-                "score": round(score, 3),
-                "reasons": reasons,
-                "suggestion_margin": None if margin is None else round(margin, 3),
-                "candidates": [
-                    {
-                        "value": item.get("value"),
-                        "score": round(s, 3),
-                        "strong_mismatch": mismatch,
-                        "reasons": why,
-                    }
-                    for s, mismatch, why, item, _ in ranked[:5]
-                ],
-            }
+            raw["_resolver"] = _resolver_payload(status, address, query, score, reasons, margin, ranked)
             return GeoPoint(
                 lat=float(data["geo_lat"]),
                 lon=float(data["geo_lon"]),
@@ -267,23 +363,7 @@ class DaDataGeocoder:
 
         score, _, reasons, item, data = chosen
         raw = dict(data)
-        raw["_resolver"] = {
-            "status": status,
-            "input": address,
-            "query": query,
-            "score": round(score, 3),
-            "reasons": reasons,
-            "suggestion_margin": None if margin is None else round(margin, 3),
-            "candidates": [
-                {
-                    "value": candidate.get("value"),
-                    "score": round(s, 3),
-                    "strong_mismatch": mismatch,
-                    "reasons": why,
-                }
-                for s, mismatch, why, candidate, _ in ranked[:5]
-            ],
-        }
+        raw["_resolver"] = _resolver_payload(status, address, query, score, reasons, margin, ranked)
         return GeoPoint(
             lat=float(data["geo_lat"]),
             lon=float(data["geo_lon"]),
