@@ -68,3 +68,4 @@ class RouteSolution:
     warnings: list[str] = field(default_factory=list)
     used_soft_windows: bool = False
     total_late_min: int = 0
+    solver_status: int | None = None
