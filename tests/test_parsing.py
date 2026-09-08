@@ -1,3 +1,5 @@
+import pytest
+
 from courier_router.parsing import parse_operation, parse_payment, parse_window, read_table
 
 
@@ -7,11 +9,22 @@ def test_window():
     assert w.end_min == 21*60
 
 
+def test_window_rejects_invalid_clock_values():
+    with pytest.raises(ValueError):
+        parse_window("12:60-14:00")
+    with pytest.raises(ValueError):
+        parse_window("25:00-26:00")
+    with pytest.raises(ValueError):
+        parse_window("23:00-24:30")
+    assert parse_window("23:00-24:00").end_min == 24 * 60
+
+
 def test_payment():
     p = parse_payment("3300/ наличка")
     assert p.amount_rub == 3300
     assert p.method == "cash"
     assert parse_payment("Бесплатно").amount_rub == 0
+    assert parse_payment("3300 безнал").method == "transfer"
 
 
 def test_operations():
