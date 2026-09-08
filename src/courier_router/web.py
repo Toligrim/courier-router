@@ -90,9 +90,46 @@ def add_user(username: str, password: str | None = None) -> None:
     print(f"Пользователь {username!r} сохранён в {USERS_PATH}")
 
 
+def list_users() -> None:
+    users = _load_users()
+    if not users:
+        print("Пользователей пока нет")
+        return
+    for username in sorted(users, key=str.casefold):
+        print(username)
+
+
 def _require_user(request: Request) -> str | None:
     user = request.session.get("user")
     return str(user) if user else None
+
+
+def _user_runs_root(user: str) -> Path:
+    """Stable filesystem namespace for one account without putting usernames in paths."""
+    user_key = hashlib.sha256(user.encode("utf-8")).hexdigest()[:32]
+    return RUNS_ROOT / "_users" / user_key
+
+
+def _owned_meta(folder: Path, user: str) -> dict | None:
+    try:
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return meta if meta.get("uploaded_by") == user else None
+
+
+def _find_run_folder(user: str, run_id: str) -> Path | None:
+    """Find a run owned by user. New namespaced layout first, then legacy v1 layout."""
+    if not run_id.isalnum():
+        return None
+    candidates = [
+        _user_runs_root(user) / run_id,
+        RUNS_ROOT / run_id,
+    ]
+    for folder in candidates:
+        if folder.is_dir() and _owned_meta(folder, user) is not None:
+            return folder
+    return None
 
 
 def _login_page(error: str = "") -> str:
@@ -101,37 +138,69 @@ def _login_page(error: str = "") -> str:
     return _shell("Вход", body)
 
 
-def _list_runs() -> list[dict]:
+def _list_runs(user: str) -> list[dict]:
     if not RUNS_ROOT.exists():
         return []
-    items = []
+
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    user_root = _user_runs_root(user)
+    if user_root.exists():
+        for folder in user_root.iterdir():
+            if not folder.is_dir():
+                continue
+            meta = _owned_meta(folder, user)
+            route_path = folder / "route.json"
+            if meta is None or not route_path.exists():
+                continue
+            try:
+                route = json.loads(route_path.read_text(encoding="utf-8"))
+                summary = route.get("summary", {})
+                items.append({
+                    "id": folder.name,
+                    "meta": meta,
+                    "summary": summary,
+                    "count": len(route.get("visits", [])),
+                    "mtime": folder.stat().st_mtime,
+                })
+                seen.add(folder.name)
+            except (OSError, ValueError, TypeError):
+                continue
+
     for folder in RUNS_ROOT.iterdir():
-        if not folder.is_dir():
+        if not folder.is_dir() or folder.name.startswith("_") or folder.name in seen:
             continue
-        meta_path = folder / "meta.json"
+        meta = _owned_meta(folder, user)
         route_path = folder / "route.json"
-        if not meta_path.exists() or not route_path.exists():
+        if meta is None or not route_path.exists():
             continue
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
             route = json.loads(route_path.read_text(encoding="utf-8"))
             summary = route.get("summary", {})
-            items.append({"id": folder.name, "meta": meta, "summary": summary, "count": len(route.get("visits", [])), "mtime": folder.stat().st_mtime})
-        except (OSError, ValueError):
+            items.append({
+                "id": folder.name,
+                "meta": meta,
+                "summary": summary,
+                "count": len(route.get("visits", [])),
+                "mtime": folder.stat().st_mtime,
+            })
+        except (OSError, ValueError, TypeError):
             continue
+
     return sorted(items, key=lambda x: x["mtime"], reverse=True)[:30]
 
 
 def _home_page(user: str, error: str = "") -> str:
     err = f'<div class="error">{html.escape(error)}</div>' if error else ""
     runs_html = ""
-    for run in _list_runs():
+    for run in _list_runs(user):
         km = run["summary"].get("total_distance_m", 0) / 1000
         runs_html += f"""<div class="run"><div><b>{html.escape(run['meta'].get('date',''))}</b><div class="muted">{run['count']} точек · {km:.1f} км · старт {html.escape(run['meta'].get('depart',''))}</div></div><a class="btn secondary" href="/routes/{run['id']}">Открыть</a></div>"""
     if not runs_html:
         runs_html = '<p class="muted">Пока нет рассчитанных маршрутов.</p>'
     today = date.today().isoformat()
-    body = f"""{err}<section class="card"><h1>Новый маршрут</h1><p class="muted">Загрузите таблицу в том же формате, что используется CLI. Поддерживаются XLSX и CSV.</p><form method="post" action="/routes" enctype="multipart/form-data"><div class="upload field"><label><b>Файл с заказами</b></label><input type="file" name="table" accept=".xlsx,.csv" required></div><div class="grid"><div class="field"><label>Дата</label><input type="date" name="day" value="{today}" required></div><div class="field"><label>Старт</label><input type="time" name="depart" value="10:00" required></div><div class="field"><label>Финиш</label><select name="end"><option value="open" selected>Последняя точка</option><option value="depot">Вернуться на базу</option></select></div></div><label><input type="checkbox" name="allow_low_confidence" value="1"> Разрешить точки с низкой точностью геокодирования</label><div class="toolbar"><button class="btn" type="submit">Построить маршрут</button></div></form></section><section class="card"><h2>Последние маршруты</h2>{runs_html}</section>"""
+    body = f"""{err}<section class="card"><h1>Новый маршрут</h1><p class="muted">Загрузите таблицу в том же формате, что используется CLI. Поддерживаются XLSX и CSV.</p><form method="post" action="/routes" enctype="multipart/form-data"><div class="upload field"><label><b>Файл с заказами</b></label><input type="file" name="table" accept=".xlsx,.csv" required></div><div class="grid"><div class="field"><label>Дата</label><input type="date" name="day" value="{today}" required></div><div class="field"><label>Старт</label><input type="time" name="depart" value="10:00" required></div><div class="field"><label>Финиш</label><select name="end"><option value="open" selected>Последняя точка</option><option value="depot">Вернуться на базу</option></select></div></div><label><input type="checkbox" name="allow_low_confidence" value="1"> Разрешить точки с низкой точностью геокодирования</label><div class="toolbar"><button class="btn" type="submit">Построить маршрут</button></div></form></section><section class="card"><h2>Мои последние маршруты</h2>{runs_html}</section>"""
     return _shell("Маршруты", body, user)
 
 
@@ -161,8 +230,6 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         stops_html += f"""<article class="stop" id="stop-{visit['sequence']}"><h3><span class="seq">{visit['sequence']}</span>{html.escape(address)}</h3><p><span class="pill">ETA {_hhmm(visit['arrival_min'])}</span> <span class="pill">{operation}</span></p><p>Заказ №{html.escape(str(stop.get('order_no','')))} · окно {window}</p>{phone_html}{f'<p>Оплата: {payment}</p>' if payment else ''}<p class="muted">От предыдущей: {visit['distance_m_from_prev']/1000:.1f} км · {round(visit['travel_sec_from_prev']/60)} мин</p><a class="btn" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a></article>"""
     data = json.dumps(route, ensure_ascii=False).replace("</", "<\\/")
     head = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-    # ВНИМАНИЕ: JS-блок ниже — обычная строка, не f-string. В нём фигурные скобки
-    # JavaScript и Leaflet-шаблон {z}/{x}/{y}, которые f-string принял бы за поля.
     body = f"""<section class="card"><h1>Маршрут на {html.escape(meta.get('date',''))}</h1><div class="grid"><div class="metric"><span class="muted">Точек</span><b>{len(route.get('visits',[]))}</b></div><div class="metric"><span class="muted">Пробег</span><b>{km:.1f} км</b></div><div class="metric"><span class="muted">Движение / ожидание</span><b>{travel} / {waiting} мин</b></div></div><div class="toolbar"><a class="btn secondary" href="/">← К загрузке</a><a class="btn secondary" href="/routes/{run_id}/itinerary">Маршрут текстом</a></div></section><div class="route-layout"><div id="map" class="map card"></div><div class="stops">{stops_html}</div></div><script id="route-data" type="application/json">{data}</script>""" + """<script>
 const route=JSON.parse(document.getElementById('route-data').textContent);
 const visits=route.visits||[]; const geometry=route.geometry||[];
@@ -235,7 +302,7 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         if len(payload) > MAX_UPLOAD_BYTES:
             return HTMLResponse(_home_page(user, f"Файл больше лимита {MAX_UPLOAD_BYTES // 1024 // 1024} МБ"), status_code=413)
         run_id = uuid4().hex[:12]
-        folder = RUNS_ROOT / run_id
+        folder = _user_runs_root(user) / run_id
         folder.mkdir(parents=True, exist_ok=False)
         input_path = folder / f"input{suffix}"
         input_path.write_bytes(payload)
@@ -258,11 +325,13 @@ def create_app(session_secret: str | None = None) -> FastAPI:
             return RedirectResponse("/login", status_code=303)
         if not run_id.isalnum():
             return HTMLResponse("Некорректный маршрут", status_code=400)
-        folder = RUNS_ROOT / run_id
+        folder = _find_run_folder(user, run_id)
+        if folder is None:
+            return HTMLResponse("Маршрут не найден", status_code=404)
         try:
             meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
             route = json.loads((folder / "route.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, TypeError):
             return HTMLResponse("Маршрут не найден", status_code=404)
         return HTMLResponse(_route_page(user, run_id, meta, route))
 
@@ -273,7 +342,10 @@ def create_app(session_secret: str | None = None) -> FastAPI:
             return RedirectResponse("/login", status_code=303)
         if not run_id.isalnum():
             return HTMLResponse("Некорректный маршрут", status_code=400)
-        path = RUNS_ROOT / run_id / "itinerary.txt"
+        folder = _find_run_folder(user, run_id)
+        if folder is None:
+            return HTMLResponse("Маршрут не найден", status_code=404)
+        path = folder / "itinerary.txt"
         if not path.exists():
             return HTMLResponse("Маршрут не найден", status_code=404)
         text = html.escape(path.read_text(encoding="utf-8"))
@@ -294,9 +366,13 @@ def main() -> None:
     serve.add_argument("--port", type=int, default=int(os.getenv("WEB_PORT", "8080")))
     user = sub.add_parser("user-add", help="Создать или сменить пароль пользователя")
     user.add_argument("username")
+    sub.add_parser("user-list", help="Показать созданные аккаунты")
     args = parser.parse_args()
     if args.command == "user-add":
         add_user(args.username)
+        return
+    if args.command == "user-list":
+        list_users()
         return
     uvicorn.run(create_app(), host=args.host, port=args.port, proxy_headers=True)
 
