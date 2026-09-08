@@ -3,7 +3,8 @@ import argparse, json, os, platform, sys
 from pathlib import Path
 from .config import Config
 from .domain import GeoPoint
-from .geocode import DaDataGeocoder, PublicNominatimGeocoder, RESOLVER_VERSION
+from .address_verification import VerifiedDaDataGeocoder, VERIFICATION_VERSION, VERIFIED, REVIEW, REJECTED
+from .geocode import PublicNominatimGeocoder
 from .llm import clean_with_openai, clean_with_anthropic
 from .optimizer import solve_single_vehicle
 from .parsing import read_table
@@ -23,7 +24,7 @@ def minutes(s: str) -> int:
 
 def get_geocoder(c: Config):
     if c.geocoder == "dadata":
-        return DaDataGeocoder(c.dadata_token, c.dadata_secret)
+        return VerifiedDaDataGeocoder(c.dadata_token, c.dadata_secret)
     if c.geocoder == "nominatim":
         return PublicNominatimGeocoder(c.tile_user_agent)
     raise RuntimeError(f"Неизвестный GEOCODER={c.geocoder}")
@@ -99,7 +100,7 @@ def _cache_matches_geocoder(c, cached) -> bool:
     provider = str(getattr(cached, "provider", ""))
     if c.geocoder == "dadata":
         resolver = _resolver_meta(cached)
-        return provider in {"dadata_suggest", "dadata_clean"} and resolver.get("version") == RESOLVER_VERSION
+        return provider == "dadata_verified" and resolver.get("version") == VERIFICATION_VERSION
     return provider == c.geocoder
 
 
@@ -126,13 +127,13 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
 
         resolver = _resolver_meta(s.geo)
         resolver_status = resolver.get("status")
-        if resolver_status == "strong_mismatch":
+        if resolver_status == REJECTED:
             candidate_values = [x.get("value") for x in resolver.get("candidates", []) if x.get("value")]
             hint = f" Лучшие варианты: {'; '.join(candidate_values[:3])}" if candidate_values else ""
-            s.warnings.append("Сильное расхождение исходного и найденного адреса")
+            s.warnings.append("Адрес не прошёл детерминированную верификацию")
             if not allow_low_confidence:
                 raise RuntimeError(
-                    f"Строка {s.source_row}: найденный адрес сильно расходится с исходным. "
+                    f"Строка {s.source_row}: адрес не прошёл проверку Clean + Suggestions. "
                     f"Исходный: {s.address_raw!r}. Найдено: {s.geo.normalized_address!r}.{hint}"
                 )
 
@@ -145,16 +146,14 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                     f"{s.geo.lat}, {s.geo.lon}"
                 )
 
-        requires_review = s.geo.confidence < 0.80 or resolver_status in {"review", "strong_mismatch"}
+        requires_review = s.geo.confidence < 0.80 or resolver_status in {REVIEW, REJECTED}
         if requires_review:
             s.warnings.append(
                 f"Геокодирование требует проверки ({s.geo.confidence:.2f}, {s.geo.precision}) — "
                 "проверьте точку на карте"
             )
 
-        # Cache only after all blocking validation has passed. This prevents a failed
-        # route build from poisoning subsequent runs with the rejected coordinate.
-        if not cache_valid:
+        if not cache_valid and resolver_status != REJECTED and not outside_expected_area:
             store.put_geocode(s.address_raw, s.district, s.geo)
 
         report.append({
@@ -169,6 +168,10 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
             "resolver_candidates": resolver.get("candidates", []),
+            "clean_quality": resolver.get("clean_quality", {}),
+            "crosscheck_distance_m": resolver.get("crosscheck_distance_m"),
+            "clean_house_fias_id": resolver.get("clean_house_fias_id"),
+            "suggest_house_fias_id": resolver.get("suggest_house_fias_id"),
         })
     return report
 
@@ -229,7 +232,7 @@ def build_parser():
     plan.add_argument("--output", required=True)
     plan.add_argument(
         "--allow-low-confidence", action="store_true",
-        help="Явно разрешить сильные расхождения адресов и координаты вне ожидаемой зоны",
+        help="Явно разрешить REVIEW/REJECTED адреса и координаты вне ожидаемой зоны",
     )
     plan.set_defaults(func=cmd_plan)
     return p
