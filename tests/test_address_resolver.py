@@ -1,5 +1,6 @@
 from courier_router.geocode import (
     DaDataGeocoder,
+    RESOLVER_VERSION,
     normalize_address_input,
     score_dadata_candidate,
 )
@@ -50,6 +51,72 @@ def test_component_score_accepts_matching_spb_house():
     assert score >= 0.90
 
 
+def test_compact_address_without_house_marker_rejects_wrong_house():
+    source = "Санкт-Петербург, Савушкина 15"
+    wrong = {
+        "region": "г Санкт-Петербург",
+        "city": "Санкт-Петербург",
+        "street": "Савушкина",
+        "house": "151",
+        "geo_lat": "59.98",
+        "geo_lon": "30.22",
+    }
+    score, reasons, strong_mismatch = score_dadata_candidate(source, wrong)
+    assert strong_mismatch
+    assert "house_mismatch" in reasons
+    assert score < 0.68
+
+
+def test_multiword_street_does_not_match_on_one_shared_word():
+    source = "Санкт-Петербург, Малая Морская ул, д 10"
+    wrong = {
+        "region": "г Санкт-Петербург",
+        "city": "Санкт-Петербург",
+        "street": "Большая Морская ул",
+        "house": "10",
+        "geo_lat": "59.93",
+        "geo_lon": "30.31",
+    }
+    score, reasons, strong_mismatch = score_dadata_candidate(source, wrong)
+    assert "street_mismatch" in reasons
+    assert score < 0.68
+    assert not strong_mismatch
+
+
+def test_explicit_leningrad_region_rejects_other_region():
+    source = "Ленинградская обл, Ломоносовский р-н, деревня Пески, ул Центральная, д 210"
+    wrong = {
+        "region": "Псковская обл",
+        "city": "",
+        "settlement": "Пески",
+        "street": "Центральная ул",
+        "house": "210",
+        "geo_lat": "57.8",
+        "geo_lon": "28.3",
+    }
+    score, reasons, strong_mismatch = score_dadata_candidate(source, wrong)
+    assert strong_mismatch
+    assert "region_mismatch" in reasons
+    assert score < 0.68
+
+
+def test_structure_mismatch_is_strong_mismatch():
+    source = "Санкт-Петербург, ул Тестовая, д 2, литера А"
+    wrong = {
+        "region": "г Санкт-Петербург",
+        "city": "Санкт-Петербург",
+        "street": "Тестовая ул",
+        "house": "2",
+        "block_type": "литера",
+        "block": "Б",
+        "geo_lat": "59.9",
+        "geo_lon": "30.3",
+    }
+    score, reasons, strong_mismatch = score_dadata_candidate(source, wrong)
+    assert strong_mismatch
+    assert "structure_mismatch" in reasons
+
+
 def test_geocoder_ranks_matching_candidate_above_wrong_same_house(monkeypatch):
     geocoder = DaDataGeocoder("token", "secret")
     good = {
@@ -88,6 +155,7 @@ def test_geocoder_ranks_matching_candidate_above_wrong_same_house(monkeypatch):
     assert result.provider_ref == "good-fias"
     assert "Комендантский" in result.normalized_address
     assert result.raw["_resolver"]["status"] == "resolved"
+    assert result.raw["_resolver"]["version"] == RESOLVER_VERSION
 
 
 def test_geocoder_marks_clean_fallback_strong_mismatch(monkeypatch):
