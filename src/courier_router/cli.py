@@ -93,6 +93,32 @@ def _resolver_meta(geo) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _flag_coord(s, note: str, r: dict | None = None) -> None:
+    """Пометить точку как «координата сомнительна» — единым понятным текстом,
+    не трогая при этом само название адреса."""
+    s.coord_status = "review"
+    s.coord_note = note
+    if note not in s.warnings:
+        s.warnings.append(note)
+    if r is not None:
+        r["coord_status"] = "review"
+        r["coord_note"] = note
+        r["requires_review"] = True
+
+
+def _clear_coord_flag(s, note: str, r: dict | None = None) -> None:
+    """Второй независимый источник подтвердил координату — снять пометку."""
+    stale = getattr(s, "coord_note", "")
+    s.coord_status, s.coord_note = "ok", ""
+    if stale and stale in s.warnings:
+        s.warnings.remove(stale)
+    if note:
+        s.warnings.append(note)
+    if r is not None:
+        r["coord_status"], r["coord_note"] = "ok", ""
+        r["requires_review"] = False
+
+
 def _cache_matches_geocoder(c, cached) -> bool:
     if not cached:
         return False
@@ -122,8 +148,8 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                     fallback = _yandex_geopoint(c, store, s.address_raw)
                 if fallback is not None:
                     s.geo = fallback
-                    s.warnings.append(
-                        "DaData не нашла адрес — координата взята с Яндекс Карт, сверьте адрес")
+                    _flag_coord(s, "DaData не нашла этот адрес. Координаты взяты с Яндекс Карт — "
+                                   "обязательно сверьте точку на карте.")
                     source = "yandex_fallback"
                 elif c.llm_provider == "none":
                     raise RuntimeError(f"Строка {s.source_row}, адрес {s.address_raw!r}: {first}") from first
@@ -155,11 +181,9 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 )
 
         requires_review = s.geo.confidence < 0.80 or resolver_status in {"review", "strong_mismatch"}
-        if requires_review:
-            s.warnings.append(
-                f"Геокодирование требует проверки ({s.geo.confidence:.2f}, {s.geo.precision}) — "
-                "проверьте точку на карте"
-            )
+        if requires_review and getattr(s, "coord_status", "ok") != "review":
+            _flag_coord(s, f"DaData дала неточное совпадение "
+                           f"({s.geo.precision}, уверенность {s.geo.confidence:.2f}) — сверьте адрес на карте.")
 
         # Cache only after all blocking validation has passed. This prevents a failed
         # route build from poisoning subsequent runs with the rejected coordinate.
@@ -181,6 +205,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "dadata_lat": s.geo.lat, "dadata_lon": s.geo.lon,
             "yandex_lat": None, "yandex_lon": None, "delta_m": None,
             "coord_source": "yandex_fallback" if source == "yandex_fallback" else "dadata",
+            "coord_status": getattr(s, "coord_status", "ok"), "coord_note": getattr(s, "coord_note", ""),
         })
 
     if getattr(c, "yandex_crosscheck", False):
@@ -252,9 +277,9 @@ def _yandex_geopoint(c, store, address):
         return None
     return GeoPoint(
         lat=y.lat, lon=y.lon, provider="yandex_maps",
-        normalized_address=y.subtitle or y.title or address,
+        normalized_address=address,          # адрес — как в таблице, без DOM-мусора Яндекса
         precision="house", confidence=0.85, provider_ref=None,
-        raw={"_resolver": {"status": "review", "source": "yandex_maps"}},
+        raw={"_resolver": {"status": "review", "source": "yandex_maps", "yandex_title": y.title}},
     )
 
 
@@ -286,31 +311,30 @@ def _yandex_crosscheck(c, stops, report, store):
             continue  # координата уже от Яндекса (fallback) — сверять не с чем
         y = found.get(str(s.source_row))
         if y is None:
-            s.warnings.append("Второй источник (Яндекс Карты) не нашёл этот адрес — координата от DaData")
+            if getattr(s, "coord_status", "ok") != "review":
+                s.warnings.append("Яндекс Карты не нашли этот адрес — координата только от DaData")
             continue
         in_area = 58.2 <= y.lat <= 61.7 and 26.5 <= y.lon <= 36.5
         delta = haversine_m((s.geo.lat, s.geo.lon), (y.lat, y.lon))
         r["yandex_lat"], r["yandex_lon"], r["delta_m"] = round(y.lat, 6), round(y.lon, 6), round(delta, 1)
         if not in_area:
-            s.warnings.append(f"Яндекс Карты вернули точку вне СПб/Ленобласти — оставлена координата DaData (Δ {delta:.0f} м)")
+            _flag_coord(s, f"Яндекс Карты вернули точку вне СПб/Ленобласти (Δ {delta:.0f} м) — "
+                           "оставлена координата DaData, сверьте адрес.", r)
             continue
         if delta <= warn_m:
+            # Второй независимый источник подтверждает координату.
+            if getattr(s, "coord_status", "ok") == "review" and r.get("coord_source") == "dadata":
+                _clear_coord_flag(s, f"Координата подтверждена Яндекс Картами (Δ {delta:.0f} м).", r)
             continue
         if not y.is_house:
-            s.warnings.append(
-                f"DaData↔Яндекс расходятся на {delta:.0f} м, но Яндекс дал не дом ({y.title or 'топоним'}) — "
-                "координата от DaData, сверьте адрес вручную")
-            r["requires_review"] = True
+            _flag_coord(s, f"DaData и Яндекс расходятся на {delta:.0f} м, но Яндекс дал не дом "
+                           f"({y.title or 'топоним'}). Оставлена координата DaData — сверьте адрес.", r)
             continue
         # Яндекс точнее: берём его координаты, помечаем на сверку, маршрут строим.
         s.geo.lat, s.geo.lon = y.lat, y.lon
         r["lat"], r["lon"], r["coord_source"] = y.lat, y.lon, "yandex_crosscheck"
-        r["requires_review"] = True
-        if y.subtitle:
-            r["normalized"] = y.subtitle
-        s.warnings.append(
-            f"DaData↔Яндекс расходятся на {delta:.0f} м — взяты координаты Яндекс Карт "
-            f"({y.title or 'дом'}), сверьте адрес")
+        _flag_coord(s, f"DaData и Яндекс расходились на {delta:.0f} м. Взяты координаты Яндекса "
+                       f"({y.title or 'дом'}) — сверьте адрес.", r)
         print(f"  ↳ строка {s.source_row}: Δ {delta:.0f} м → координаты Яндекса {y.lat:.6f},{y.lon:.6f}")
 
 

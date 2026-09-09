@@ -16,6 +16,7 @@ from courier_router.storage import Storage
 def _stop(row, addr, lat, lon):
     return SimpleNamespace(
         source_row=row, address_raw=addr, district="", warnings=[],
+        coord_status="ok", coord_note="",
         geo=GeoPoint(lat=lat, lon=lon, provider="dadata_suggest",
                      normalized_address=addr, precision="nearest_house", confidence=0.99),
     )
@@ -63,7 +64,9 @@ def test_large_delta_takes_yandex_and_flags_without_raising(monkeypatch, tmp_pat
     assert report[0]["coord_source"] == "yandex_crosscheck"
     assert report[0]["requires_review"] is True
     assert report[0]["delta_m"] > 75
-    assert any("взяты координаты Яндекс" in w for w in stops[0].warnings)
+    assert stops[0].coord_status == "review"
+    assert any("Взяты координаты Яндекса" in w for w in stops[0].warnings)
+    assert report[0]["coord_note"]
     # вторая точка не тронута
     assert report[1]["coord_source"] == "dadata"
 
@@ -77,7 +80,7 @@ def test_large_delta_but_not_house_keeps_dadata(monkeypatch, tmp_path):
     assert (stops[0].geo.lat, stops[0].geo.lon) == (59.86156, 30.18205)
     assert report[0]["requires_review"] is True
     assert any("не дом" in w for w in stops[0].warnings)
-    assert any("не нашёл этот адрес" in w for w in stops[1].warnings)
+    assert any("не нашли этот адрес" in w for w in stops[1].warnings)
 
 
 def test_headless_unavailable_is_graceful(monkeypatch, tmp_path):
@@ -103,7 +106,7 @@ def _cfg():
 
 def _plain_stop(row, addr):
     return SimpleNamespace(source_row=row, order_no=row, address_raw=addr, district="",
-                           warnings=[], geo=None)
+                           warnings=[], coord_status="ok", coord_note="", geo=None)
 
 
 def test_dadata_failure_falls_back_to_yandex(monkeypatch, tmp_path):
@@ -119,7 +122,8 @@ def test_dadata_failure_falls_back_to_yandex(monkeypatch, tmp_path):
     assert report[0]["coord_source"] == "yandex_fallback"
     assert (round(s.geo.lat, 5), round(s.geo.lon, 5)) == (59.78306, 30.13506)
     assert report[0]["requires_review"] is True
-    assert any("координата взята с Яндекс" in w for w in s.warnings)
+    assert s.coord_status == "review" and s.coord_note
+    assert any("Координаты взяты с Яндекс" in w for w in s.warnings)
 
 
 def test_dadata_and_yandex_both_fail_still_raises(monkeypatch, tmp_path):
