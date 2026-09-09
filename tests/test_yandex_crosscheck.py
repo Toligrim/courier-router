@@ -87,3 +87,46 @@ def test_headless_unavailable_is_graceful(monkeypatch, tmp_path):
     assert all(r["coord_source"] == "dadata" for r in report)
     assert all(r["requires_review"] is False for r in report)
     assert any("недоступна" in w for w in stops[0].warnings)
+
+
+# ---- DaData вообще не нашла адрес → координата от Яндекс Карт как основной источник ----
+
+class _RaisingGeocoder:
+    def geocode(self, address, district=""):
+        raise ValueError("DaData не вернула адрес (clean_disabled)")
+
+
+def _cfg():
+    return SimpleNamespace(llm_provider="none", geocoder="dadata",
+                           yandex_crosscheck=True, yandex_xcheck_warn_m=75.0)
+
+
+def _plain_stop(row, addr):
+    return SimpleNamespace(source_row=row, order_no=row, address_raw=addr, district="",
+                           warnings=[], geo=None)
+
+
+def test_dadata_failure_falls_back_to_yandex(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "get_geocoder", lambda c: _RaisingGeocoder())
+    monkeypatch.setattr(ym, "lookup_batch", lambda items: {
+        items[0][0]: ym.YResult(59.78306, 30.13506, "Колхозная улица, 12",
+                                "Колхозная улица, 12, территория Горелово", "u", True)})
+    store = Storage(str(tmp_path / "t.db"))
+    s = _plain_stop(7, "Санкт-Петербург, тер Горелово, ул Колхозная, д 12 литера А / частный дом")
+
+    report = cli.geocode_stops(_cfg(), [s], store)   # не должно бросить
+
+    assert report[0]["coord_source"] == "yandex_fallback"
+    assert (round(s.geo.lat, 5), round(s.geo.lon, 5)) == (59.78306, 30.13506)
+    assert report[0]["requires_review"] is True
+    assert any("координата взята с Яндекс" in w for w in s.warnings)
+
+
+def test_dadata_and_yandex_both_fail_still_raises(monkeypatch, tmp_path):
+    import pytest
+    monkeypatch.setattr(cli, "get_geocoder", lambda c: _RaisingGeocoder())
+    monkeypatch.setattr(ym, "lookup_batch", lambda items: {items[0][0]: None})
+    store = Storage(str(tmp_path / "t.db"))
+    s = _plain_stop(7, "мусорный адрес которого нет")
+    with pytest.raises(RuntimeError, match="Строка 7"):
+        cli.geocode_stops(_cfg(), [s], store)
