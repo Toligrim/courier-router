@@ -29,6 +29,11 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         lines += [
             f"{number}. ETA {hhmm(visit.arrival_min)} · {op} · заказ №{s.order_no}",
             f"   {s.geo.normalized_address if s.geo else s.address_raw}",
+        ]
+        norm = (s.geo.normalized_address if s.geo else "") or ""
+        if s.address_raw and s.address_raw.strip().lower() not in norm.strip().lower():
+            lines.append(f"   в таблице: {s.address_raw}")
+        lines += [
             f"   {s.phone}",
             f"   Окно: {s.window.raw if s.window else 'нет'}",
         ]
@@ -43,8 +48,6 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         lines += [
             f"   От предыдущей точки: {fmt_km(visit.distance_m_from_prev)} км · {round(visit.travel_sec_from_prev/60)} мин",
         ]
-        if s.geo and s.geo.confidence < 0.80:
-            lines.append(f"   ⚠ Геокодирование требует проверки: confidence={s.geo.confidence:.2f}, precision={s.geo.precision}")
         for w in s.warnings:
             lines.append(f"   ⚠ {w}")
         lines.append("")
@@ -82,6 +85,8 @@ def route_json(stops: list[Stop], solution: RouteSolution, geometry):
             "window": s.window.raw if s.window else None,
             "payment": s.payment.raw,
             "comment": s.comment,
+            "coord_status": getattr(s, "coord_status", "ok"),
+            "coord_note": getattr(s, "coord_note", ""),
             "warnings": s.warnings,
         }
     return {

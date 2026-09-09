@@ -47,6 +47,8 @@ class Stop:
     shipment_id: str | None = None
     geo: GeoPoint | None = None
     warnings: list[str] = field(default_factory=list)
+    coord_status: str = "ok"      # "ok" | "review" — надёжна ли координата
+    coord_note: str = ""          # человекочитаемое пояснение, если координата сомнительна
 
 @dataclass
 class RouteVisit:
