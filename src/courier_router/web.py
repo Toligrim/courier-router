@@ -229,8 +229,32 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         payment = html.escape(stop.get("payment") or "")
         stops_html += f"""<article class="stop" id="stop-{visit['sequence']}"><h3><span class="seq">{visit['sequence']}</span>{html.escape(address)}</h3><p><span class="pill">ETA {_hhmm(visit['arrival_min'])}</span> <span class="pill">{operation}</span></p><p>Заказ №{html.escape(str(stop.get('order_no','')))} · окно {window}</p>{phone_html}{f'<p>Оплата: {payment}</p>' if payment else ''}<p class="muted">От предыдущей: {visit['distance_m_from_prev']/1000:.1f} км · {round(visit['travel_sec_from_prev']/60)} мин</p><a class="btn" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a></article>"""
     data = json.dumps(route, ensure_ascii=False).replace("</", "<\\/")
+
+    # Одна ссылка на весь маршрут для приложения «Яндекс Карты / Навигатор» на iOS.
+    navi_url = ""
+    visits = route.get("visits", [])
+    geom = route.get("geometry") or []
+    if visits and geom:
+        from .navlinks import RoutePoint, build_yandex_url
+        d_lat, d_lon = geom[0][0], geom[0][1]
+        pts = [RoutePoint("start", "База", d_lat, d_lon)]
+        for v in visits:
+            st = v["stop"]
+            pts.append(RoutePoint("via", st.get("address_normalized") or st.get("address_raw") or "",
+                                  st["lat"], st["lon"], str(st.get("order_no", ""))))
+        if meta.get("end", "depot") == "depot":
+            pts.append(RoutePoint("finish", "База", d_lat, d_lon))
+        if len(pts) >= 2:
+            navi_url = build_yandex_url(pts)
+    navi_html = (
+        f'<a class="btn" href="{navi_url}">🧭 Весь маршрут в Яндекс Навигаторе</a>'
+        f'<p class="muted" style="margin:4px 0 0">Откроется приложение на телефоне. '
+        f'Яндекс считает переходы по ссылке: ~5 за 24 ч, дальше откроет веб-версию.</p>'
+        if navi_url else ""
+    )
+
     head = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-    body = f"""<section class="card"><h1>Маршрут на {html.escape(meta.get('date',''))}</h1><div class="grid"><div class="metric"><span class="muted">Точек</span><b>{len(route.get('visits',[]))}</b></div><div class="metric"><span class="muted">Пробег</span><b>{km:.1f} км</b></div><div class="metric"><span class="muted">Движение / ожидание</span><b>{travel} / {waiting} мин</b></div></div><div class="toolbar"><a class="btn secondary" href="/">← К загрузке</a><a class="btn secondary" href="/routes/{run_id}/itinerary">Маршрут текстом</a></div></section><div class="route-layout"><div id="map" class="map card"></div><div class="stops">{stops_html}</div></div><script id="route-data" type="application/json">{data}</script>""" + """<script>
+    body = f"""<section class="card"><h1>Маршрут на {html.escape(meta.get('date',''))}</h1><div class="grid"><div class="metric"><span class="muted">Точек</span><b>{len(route.get('visits',[]))}</b></div><div class="metric"><span class="muted">Пробег</span><b>{km:.1f} км</b></div><div class="metric"><span class="muted">Движение / ожидание</span><b>{travel} / {waiting} мин</b></div></div>{navi_html}<div class="toolbar"><a class="btn secondary" href="/">← К загрузке</a><a class="btn secondary" href="/routes/{run_id}/itinerary">Маршрут текстом</a></div></section><div class="route-layout"><div id="map" class="map card"></div><div class="stops">{stops_html}</div></div><script id="route-data" type="application/json">{data}</script>""" + """<script>
 const route=JSON.parse(document.getElementById('route-data').textContent);
 const visits=route.visits||[]; const geometry=route.geometry||[];
 const map=L.map('map',{zoomControl:true});

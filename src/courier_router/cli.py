@@ -169,8 +169,117 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
             "resolver_candidates": resolver.get("candidates", []),
+            "dadata_lat": s.geo.lat, "dadata_lon": s.geo.lon,
+            "yandex_lat": None, "yandex_lon": None, "delta_m": None,
+            "coord_source": "dadata",
         })
+
+    if getattr(c, "yandex_crosscheck", False):
+        _yandex_crosscheck(c, stops, report, store)
     return report
+
+
+_YANDEX_CACHE_SCHEMA = """CREATE TABLE IF NOT EXISTS yandex_maps_cache (
+  cache_key TEXT PRIMARY KEY, lat REAL, lon REAL, title TEXT, subtitle TEXT,
+  url TEXT, is_house INTEGER, found INTEGER NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"""
+
+
+def _yandex_query(raw: str) -> str:
+    """Строка для поиска на Яндекс Картах из сырого адреса Excel (без квартиры)."""
+    import re
+    q = re.sub(r",?\s*кв\.?\s*[0-9А-Яа-я/\-]+\s*$", "", raw or "").strip(" ,")
+    q = re.sub(r"^\s*г\s+", "", q)
+    return q
+
+
+def _yandex_lookup_cached(c, store, jobs):
+    """jobs: [(key, query, (near_lat, near_lon))] -> {key: YResult|None}. Кэш в SQLite."""
+    from . import yandex_maps as ym
+    store.con.executescript(_YANDEX_CACHE_SCHEMA)
+    result, todo = {}, []
+    for key, query, near in jobs:
+        ck = " ".join(query.lower().replace("ё", "е").split())
+        row = store.con.execute(
+            "SELECT lat,lon,title,subtitle,url,is_house,found FROM yandex_maps_cache WHERE cache_key=?",
+            (ck,)).fetchone()
+        if row is None:
+            todo.append((key, query, near, ck))
+        elif not row[6]:
+            result[key] = None
+        else:
+            result[key] = ym.YResult(row[0], row[1], row[2] or "", row[3] or "", row[4] or "", bool(row[5]))
+    if todo:
+        fresh = ym.lookup_batch([(k, q, n) for k, q, n, _ in todo])
+        for key, query, near, ck in todo:
+            r = fresh.get(key)
+            if r is None:
+                store.con.execute(
+                    "INSERT INTO yandex_maps_cache(cache_key,found) VALUES(?,0) "
+                    "ON CONFLICT(cache_key) DO UPDATE SET found=0, updated_at=CURRENT_TIMESTAMP", (ck,))
+            else:
+                store.con.execute(
+                    "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found) "
+                    "VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(cache_key) DO UPDATE SET lat=excluded.lat,"
+                    "lon=excluded.lon,title=excluded.title,subtitle=excluded.subtitle,url=excluded.url,"
+                    "is_house=excluded.is_house,found=1,updated_at=CURRENT_TIMESTAMP",
+                    (ck, r.lat, r.lon, r.title, r.subtitle, r.url, int(r.is_house)))
+            result[key] = r
+        store.con.commit()
+    return result
+
+
+def _yandex_crosscheck(c, stops, report, store):
+    """Второй источник координат — Яндекс Карты через headless-браузер.
+
+    Для каждой точки: расхождение с DaData считается по haversine. Если оно больше
+    порога и Яндекс дал дом — координаты берутся с Яндекса (он в этой задаче точнее),
+    точка помечается на сверку, но маршрут всё равно строится.
+    """
+    from . import yandex_maps as ym
+    from .navlinks import haversine_m
+
+    jobs = [(str(s.source_row), _yandex_query(s.address_raw), (s.geo.lat, s.geo.lon)) for s in stops]
+    try:
+        found = _yandex_lookup_cached(c, store, jobs)
+    except ym.Unavailable as e:
+        for s in stops:
+            s.warnings.append("Сверка с Яндекс Картами недоступна (нет playwright/chromium)")
+        for r in report:
+            r["coord_source"] = "dadata"
+        print(f"  !! Яндекс-сверка недоступна: {e}", file=sys.stderr)
+        return
+
+    warn_m = c.yandex_xcheck_warn_m
+    for s, r in zip(stops, report):
+        y = found.get(str(s.source_row))
+        if y is None:
+            s.warnings.append("Второй источник (Яндекс Карты) не нашёл этот адрес — координата от DaData")
+            continue
+        in_area = 58.2 <= y.lat <= 61.7 and 26.5 <= y.lon <= 36.5
+        delta = haversine_m((s.geo.lat, s.geo.lon), (y.lat, y.lon))
+        r["yandex_lat"], r["yandex_lon"], r["delta_m"] = round(y.lat, 6), round(y.lon, 6), round(delta, 1)
+        if not in_area:
+            s.warnings.append(f"Яндекс Карты вернули точку вне СПб/Ленобласти — оставлена координата DaData (Δ {delta:.0f} м)")
+            continue
+        if delta <= warn_m:
+            continue
+        if not y.is_house:
+            s.warnings.append(
+                f"DaData↔Яндекс расходятся на {delta:.0f} м, но Яндекс дал не дом ({y.title or 'топоним'}) — "
+                "координата от DaData, сверьте адрес вручную")
+            r["requires_review"] = True
+            continue
+        # Яндекс точнее: берём его координаты, помечаем на сверку, маршрут строим.
+        s.geo.lat, s.geo.lon = y.lat, y.lon
+        r["lat"], r["lon"], r["coord_source"] = y.lat, y.lon, "yandex_crosscheck"
+        r["requires_review"] = True
+        if y.subtitle:
+            r["normalized"] = y.subtitle
+        s.warnings.append(
+            f"DaData↔Яндекс расходятся на {delta:.0f} м — взяты координаты Яндекс Карт "
+            f"({y.title or 'дом'}), сверьте адрес")
+        print(f"  ↳ строка {s.source_row}: Δ {delta:.0f} м → координаты Яндекса {y.lat:.6f},{y.lon:.6f}")
 
 
 def cmd_plan(args):

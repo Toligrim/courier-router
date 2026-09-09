@@ -25,5 +25,9 @@ class Config:
     depot_lon: str = os.getenv("DEPOT_LON", "")
     default_service_min: int = int(os.getenv("DEFAULT_SERVICE_MIN", "10"))
     solver_time_limit_sec: int = int(os.getenv("SOLVER_TIME_LIMIT_SEC", "8"))
+    # Второй источник координат: Яндекс Карты через headless-браузер (нужен playwright + chromium).
+    yandex_crosscheck: bool = os.getenv("YANDEX_CROSSCHECK", "0").strip().lower() in {"1", "true", "yes", "on"}
+    # Расхождение DaData↔Яндекс больше этого (метры) → берём координаты Яндекса и помечаем на сверку.
+    yandex_xcheck_warn_m: float = float(os.getenv("YANDEX_XCHECK_WARN_M", "75"))
     tile_url: str = os.getenv("TILE_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
     tile_user_agent: str = os.getenv("TILE_USER_AGENT", "courier-router/0.1")

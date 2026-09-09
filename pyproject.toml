@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "courier-router"
-version = "0.2.0"
-description = "Courier route planner with CLI and a small authenticated web UI"
+version = "0.3.0"
+description = "Courier route planner with CLI, authenticated web UI, Yandex Navigator deep-links and an optional Yandex Maps coordinate cross-check"
 requires-python = ">=3.13,<3.15"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -22,6 +22,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10"]
+# Второй источник координат — Яндекс Карты через headless-браузер.
+# После установки: python -m playwright install chromium
+yandex = ["playwright>=1.40,<2"]
 
 [project.scripts]
 courier-route = "courier_router.cli:main"
