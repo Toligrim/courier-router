@@ -122,6 +122,12 @@ select {
   font: inherit;
 }
 
+input,
+select,
+textarea {
+  max-width: 100%;
+}
+
 button,
 input,
 select,
@@ -253,6 +259,7 @@ h3 {
 
 .field {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 7px;
   margin-bottom: 14px;
@@ -268,6 +275,8 @@ h3 {
 .field input,
 .field select {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 48px;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -276,6 +285,18 @@ h3 {
   background: var(--surface);
   color: var(--ink);
   font-size: 16px;
+}
+
+.field select {
+  -webkit-appearance: none;
+  appearance: none;
+  overflow: hidden;
+  padding-right: 34px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2368707d' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
 }
 
 .field input:focus,
