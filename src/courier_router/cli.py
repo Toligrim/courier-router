@@ -117,12 +117,21 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 s.geo = g.geocode(s.address_raw, s.district)
                 source = c.geocoder if not cached else f"{c.geocoder}:cache-refresh"
             except Exception as first:
-                if c.llm_provider == "none":
+                fallback = None
+                if getattr(c, "yandex_crosscheck", False):
+                    fallback = _yandex_geopoint(c, store, s.address_raw)
+                if fallback is not None:
+                    s.geo = fallback
+                    s.warnings.append(
+                        "DaData не нашла адрес — координата взята с Яндекс Карт, сверьте адрес")
+                    source = "yandex_fallback"
+                elif c.llm_provider == "none":
                     raise RuntimeError(f"Строка {s.source_row}, адрес {s.address_raw!r}: {first}") from first
-                cleaned = maybe_llm_clean(c, s.address_raw, s.district)
-                s.geo = g.geocode(cleaned, s.district)
-                s.warnings.append("Адрес потребовал LLM-нормализацию")
-                source = f"{c.geocoder}+{c.llm_provider}"
+                else:
+                    cleaned = maybe_llm_clean(c, s.address_raw, s.district)
+                    s.geo = g.geocode(cleaned, s.district)
+                    s.warnings.append("Адрес потребовал LLM-нормализацию")
+                    source = f"{c.geocoder}+{c.llm_provider}"
 
         resolver = _resolver_meta(s.geo)
         resolver_status = resolver.get("status")
@@ -171,7 +180,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "resolver_candidates": resolver.get("candidates", []),
             "dadata_lat": s.geo.lat, "dadata_lon": s.geo.lon,
             "yandex_lat": None, "yandex_lon": None, "delta_m": None,
-            "coord_source": "dadata",
+            "coord_source": "yandex_fallback" if source == "yandex_fallback" else "dadata",
         })
 
     if getattr(c, "yandex_crosscheck", False):
@@ -229,6 +238,26 @@ def _yandex_lookup_cached(c, store, jobs):
     return result
 
 
+def _yandex_geopoint(c, store, address):
+    """Координата от Яндекс Карт как основной источник — когда DaData вообще не нашла адрес."""
+    from . import yandex_maps as ym
+    try:
+        found = _yandex_lookup_cached(c, store, [("x", _yandex_query(address), None)])
+    except ym.Unavailable:
+        return None
+    y = found.get("x")
+    if not y or not y.is_house:
+        return None
+    if not (58.2 <= y.lat <= 61.7 and 26.5 <= y.lon <= 36.5):
+        return None
+    return GeoPoint(
+        lat=y.lat, lon=y.lon, provider="yandex_maps",
+        normalized_address=y.subtitle or y.title or address,
+        precision="house", confidence=0.85, provider_ref=None,
+        raw={"_resolver": {"status": "review", "source": "yandex_maps"}},
+    )
+
+
 def _yandex_crosscheck(c, stops, report, store):
     """Второй источник координат — Яндекс Карты через headless-браузер.
 
@@ -239,19 +268,22 @@ def _yandex_crosscheck(c, stops, report, store):
     from . import yandex_maps as ym
     from .navlinks import haversine_m
 
-    jobs = [(str(s.source_row), _yandex_query(s.address_raw), (s.geo.lat, s.geo.lon)) for s in stops]
+    jobs = [(str(s.source_row), _yandex_query(s.address_raw), (s.geo.lat, s.geo.lon))
+            for s, r in zip(stops, report) if r.get("coord_source") == "dadata"]
+    if not jobs:
+        return
     try:
         found = _yandex_lookup_cached(c, store, jobs)
     except ym.Unavailable as e:
         for s in stops:
             s.warnings.append("Сверка с Яндекс Картами недоступна (нет playwright/chromium)")
-        for r in report:
-            r["coord_source"] = "dadata"
         print(f"  !! Яндекс-сверка недоступна: {e}", file=sys.stderr)
         return
 
     warn_m = c.yandex_xcheck_warn_m
     for s, r in zip(stops, report):
+        if r.get("coord_source") != "dadata":
+            continue  # координата уже от Яндекса (fallback) — сверять не с чем
         y = found.get(str(s.source_row))
         if y is None:
             s.warnings.append("Второй источник (Яндекс Карты) не нашёл этот адрес — координата от DaData")
