@@ -180,10 +180,24 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                     f"{s.geo.lat}, {s.geo.lon}"
                 )
 
-        requires_review = s.geo.confidence < 0.80 or resolver_status in {"review", "strong_mismatch"}
+        # "review" со стороны DaData при точном доме и высокой уверенности означает лишь
+        # «в подсказках было несколько почти одинаковых адресов» — координата при этом
+        # надёжная, пугающую пометку не ставим. Флаг — только при реальном сомнении.
+        house_level = s.geo.precision in {"exact", "nearest_house", "house", "number"}
+        low_confidence = s.geo.confidence < 0.90
+        coarse = not house_level
+        requires_review = (low_confidence or coarse or resolver_status == "strong_mismatch")
+        if resolver_status == "review" and not requires_review:
+            s.warnings.append(
+                f"DaData: дом найден точно (уверенность {s.geo.confidence:.2f}), "
+                "но в подсказках было несколько похожих адресов")
         if requires_review and getattr(s, "coord_status", "ok") != "review":
-            _flag_coord(s, f"DaData дала неточное совпадение "
-                           f"({s.geo.precision}, уверенность {s.geo.confidence:.2f}) — сверьте адрес на карте.")
+            if coarse:
+                _flag_coord(s, f"DaData определила адрес только до уровня «{s.geo.precision}» "
+                               f"(уверенность {s.geo.confidence:.2f}), не до дома — сверьте адрес на карте.")
+            else:
+                _flag_coord(s, f"DaData не уверена в точном доме (уверенность {s.geo.confidence:.2f}) — "
+                               "сверьте адрес на карте.")
 
         # Cache only after all blocking validation has passed. This prevents a failed
         # route build from poisoning subsequent runs with the rejected coordinate.
