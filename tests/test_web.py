@@ -15,7 +15,7 @@ def test_web_app_can_be_created_with_explicit_secret():
     assert app.title == "Courier Router Web"
 
 
-def _write_run(folder, owner: str, day: str = "2026-09-08"):
+def _write_run(folder, owner: str, day: str = "2026-09-08", review: bool = False):
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "meta.json").write_text(
         json.dumps({"date": day, "depart": "10:00", "uploaded_by": owner}),
@@ -24,7 +24,10 @@ def _write_run(folder, owner: str, day: str = "2026-09-08"):
     (folder / "route.json").write_text(
         json.dumps({
             "summary": {"total_distance_m": 12345},
-            "visits": [{"sequence": 1}],
+            "visits": [{
+                "sequence": 1,
+                "stop": {"coord_status": "review" if review else "ok"},
+            }],
         }),
         encoding="utf-8",
     )
@@ -44,6 +47,15 @@ def test_route_history_is_isolated_per_user(monkeypatch, tmp_path):
     assert web._find_run_folder("tolya", "partn001") is None
     assert web._find_run_folder("partner", "tolya001") is None
     assert web._find_run_folder("tolya", "tolya001") == tolya
+
+
+def test_route_history_counts_coordinate_reviews(monkeypatch, tmp_path):
+    monkeypatch.setattr(web, "RUNS_ROOT", tmp_path / "runs")
+    folder = web._user_runs_root("tolya") / "review001"
+    _write_run(folder, "tolya", review=True)
+
+    runs = web._list_runs("tolya")
+    assert runs[0]["review_count"] == 1
 
 
 def test_legacy_v1_route_is_visible_only_to_recorded_owner(monkeypatch, tmp_path):
@@ -105,3 +117,116 @@ def test_delete_requires_login(monkeypatch, tmp_path):
     client = TestClient(web.create_app("test-secret"))
     r = client.post("/routes/whatever0001/delete", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
+
+
+def test_login_page_is_mobile_friendly():
+    page = web._login_page()
+    assert 'autocomplete="username"' in page
+    assert 'autocomplete="current-password"' in page
+    assert 'autocapitalize="none"' in page
+    assert 'viewport-fit=cover' in page
+
+
+def test_home_page_has_dropzone_progress_overlay_and_disabled_submit(monkeypatch):
+    monkeypatch.setattr(web, "_list_runs", lambda user: [])
+    page = web._home_page("tolya")
+
+    assert 'id="drop-zone"' in page
+    assert 'id="selected-file"' in page
+    assert 'id="build-submit" type="submit" disabled' in page
+    assert 'id="build-overlay"' in page
+    assert "Строю маршрут, это займёт до минуты" in page
+    assert "input.files" in page
+    assert "pageshow" in page
+    assert "prefers-color-scheme: dark" in page
+    assert "safe-area-inset-bottom" in page
+
+
+def test_home_page_surfaces_error_line_and_keeps_full_details(monkeypatch):
+    monkeypatch.setattr(web, "_list_runs", lambda user: [])
+    page = web._home_page("tolya", "headless failed\nERROR: Yandex timeout\ntrace line")
+
+    assert '<div class="error-summary">ERROR: Yandex timeout</div>' in page
+    assert '<summary>Подробности</summary>' in page
+    assert "headless failed" in page
+    assert "trace line" in page
+
+
+def _sample_route(review: bool = True):
+    return {
+        "feasible": True,
+        "summary": {
+            "total_distance_m": 12345,
+            "total_travel_sec": 3660,
+            "total_wait_sec": 300,
+        },
+        "geometry": [[59.93, 30.31], [59.94, 30.32]],
+        "visits": [{
+            "sequence": 1,
+            "arrival_min": 600,
+            "departure_min": 610,
+            "travel_sec_from_prev": 900,
+            "distance_m_from_prev": 5000,
+            "late_by_min": 0,
+            "stop": {
+                "order_no": "42",
+                "operation": "pickup",
+                "phone": "+7 900 000-00-00",
+                "payment": "Карта",
+                "window": "10:00-12:00",
+                "comment": "Позвонить заранее",
+                "address_raw": "СПб, Невский 1",
+                "address_normalized": "г Санкт-Петербург, Невский проспект, д 1",
+                "lat": 59.94,
+                "lon": 30.32,
+                "coord_status": "review" if review else "ok",
+                "coord_note": "точка требует ручной сверки" if review else "",
+                "warnings": [],
+            },
+        }],
+    }
+
+
+def test_route_page_has_mobile_list_map_switch_sticky_navigation_and_menu_delete():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    page = web._route_page("tolya", "abc123", meta, _sample_route())
+
+    assert 'data-route-view="list"' in page
+    assert 'data-route-switch="list"' in page
+    assert 'data-route-switch="map"' in page
+    assert "map.invalidateSize" in page
+    assert "map.setView(marker.getLatLng(), 16" in page
+    assert "scrollIntoView" in page
+    assert 'class="bottom-action"' in page
+    assert "🧭 Открыть в Навигаторе" in page
+    assert '<summary class="icon-btn" aria-label="Действия с маршрутом">···</summary>' in page
+    assert 'class="menu-danger" type="submit">Удалить маршрут</button>' in page
+    assert "Маршрут текстом" not in page
+
+
+def test_route_page_keeps_coordinate_review_separate_from_address_and_simplifies_metrics():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    page = web._route_page("tolya", "abc123", meta, _sample_route())
+
+    assert "г Санкт-Петербург, Невский проспект, д 1" in page
+    assert "в таблице: СПб, Невский 1" in page
+    assert "⚠ проверить координаты" in page
+    assert "точка требует ручной сверки" in page
+    assert 'class="marker-num ${operation}${reviewClass}"' in page
+    assert 'class="metric-label">Пробег</span>' in page
+    assert 'class="metric-label">Время в пути</span>' in page
+    assert "Движение / ожидание" not in page
+    assert "1 точка, из них 1 на сверку" in page
+
+
+def test_route_page_handles_infeasible_route_without_map():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    page = web._route_page(
+        "tolya", "abc123", meta,
+        {"feasible": False, "warnings": ["Временные окна несовместимы"]},
+    )
+
+    assert "Маршрут не построен" in page
+    assert "Временные окна несовместимы" in page
+    assert 'id="map"' not in page
+    assert 'href="/">← К загрузке</a>' in page
