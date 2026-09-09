@@ -49,7 +49,8 @@ def test_low_confidence_is_warning_not_failure(monkeypatch):
 
     assert report[0]["requires_review"] is True
     assert report[0]["outside_expected_area"] is False
-    assert any("0.72" in warning for warning in s.warnings)
+    assert s.coord_status == "review" and "улиц" in s.coord_note.lower()
+    assert s.warnings == []
 
 
 def test_outside_expected_area_still_blocks(monkeypatch):

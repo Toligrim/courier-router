@@ -210,8 +210,8 @@ def test_route_page_keeps_coordinate_review_separate_from_address_and_simplifies
 
     assert "г Санкт-Петербург, Невский проспект, д 1" in page
     assert "в таблице: СПб, Невский 1" in page
-    assert "⚠ проверить координаты" in page
-    assert "точка требует ручной сверки" in page
+    assert "⚠ точка требует ручной сверки" in page
+    assert "проверить координаты" not in page  # без отдельной пилюли — только одна строка
     assert 'class="marker-num ${operation}${reviewClass}"' in page
     assert 'class="metric-label">Пробег</span>' in page
     assert 'class="metric-label">Время в пути</span>' in page
