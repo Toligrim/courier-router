@@ -85,6 +85,29 @@ def cmd_geocode_depot(args):
     }, ensure_ascii=False, indent=2))
 
 
+def cmd_alias(args):
+    """Ручное закрепление координаты за адресом (побеждает DaData и Яндекс-сверку)."""
+    c = Config()
+    store = Storage(c.db_path)
+    if args.list:
+        rows = store.list_aliases()
+        if not rows:
+            print("Закреплённых адресов нет")
+        for alias, lat, lon, norm, note, upd in rows:
+            print(f"{lat:.6f},{lon:.6f}  {alias}" + (f"  — {note}" if note else ""))
+        return 0
+    if args.delete:
+        n = store.delete_alias(args.address, args.district)
+        print(f"Удалено: {n}")
+        return 0
+    if args.lat is None or args.lon is None:
+        raise RuntimeError("Нужны --lat и --lon (или --list / --delete)")
+    store.put_alias(args.address, args.district, args.lat, args.lon,
+                    normalized_address=args.normalized or args.address, note=args.note or "")
+    print(f"Закреплено: {args.address!r} -> {args.lat:.6f},{args.lon:.6f}")
+    return 0
+
+
 def _resolver_meta(geo) -> dict:
     raw = getattr(geo, "raw", None)
     if not isinstance(raw, dict):
@@ -125,10 +148,15 @@ def _cache_matches_geocoder(c, cached) -> bool:
 def geocode_stops(c, stops, store, allow_low_confidence=False):
     g = get_geocoder(c)
     report = []
+    get_alias = getattr(store, "get_alias", None)
     for s in stops:
+        alias = get_alias(s.address_raw, s.district) if get_alias else None
         cached = store.get_geocode(s.address_raw, s.district)
         cache_valid = _cache_matches_geocoder(c, cached)
-        if cached and cache_valid:
+        if alias is not None:
+            s.geo = alias
+            source = "alias"
+        elif cached and cache_valid:
             s.geo = cached
             source = "cache"
         else:
@@ -174,7 +202,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
 
         # resolver_status == "review" при точном доме и высокой уверенности — это лишь
         # «несколько похожих подсказок», координата надёжная: не показываем ничего.
-        house_level = s.geo.precision in {"exact", "nearest_house", "house", "number"}
+        house_level = s.geo.precision in {"exact", "nearest_house", "house", "number", "verified"}
         coarse = not house_level
         requires_review = (s.geo.confidence < 0.90 or coarse or resolver_status == "strong_mismatch")
         if requires_review and getattr(s, "coord_status", "ok") != "review":
@@ -204,7 +232,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "resolver_candidates": resolver.get("candidates", []),
             "dadata_lat": s.geo.lat, "dadata_lon": s.geo.lon,
             "yandex_lat": None, "yandex_lon": None, "delta_m": None,
-            "coord_source": "yandex_fallback" if source == "yandex_fallback" else "dadata",
+            "coord_source": source if source in {"yandex_fallback", "alias"} else "dadata",
             "coord_status": getattr(s, "coord_status", "ok"), "coord_note": getattr(s, "coord_note", ""),
         })
 
@@ -275,6 +303,8 @@ def _yandex_geopoint(c, store, address):
         return None
     if not (58.2 <= y.lat <= 61.7 and 26.5 <= y.lon <= 36.5):
         return None
+    if ym._match_score(address, y.title, y.subtitle) < 0.55:
+        return None  # Яндекс нашёл не тот адрес (улица/дом не совпали)
     return GeoPoint(
         lat=y.lat, lon=y.lon, provider="yandex_maps",
         normalized_address=address,          # адрес — как в таблице, без DOM-мусора Яндекса
@@ -321,10 +351,13 @@ def _yandex_crosscheck(c, stops, report, store):
             if getattr(s, "coord_status", "ok") == "review" and r.get("coord_source") == "dadata":
                 _clear_coord_flag(s, r)
             continue
-        if not y.is_house:
+        y_matches = ym._match_score(s.address_raw, y.title, y.subtitle) >= 0.55
+        if not y.is_house or not y_matches:
+            # Яндекс расходится, но его результат сам сомнителен (не дом или другая
+            # улица) — координату DaData не трогаем, просто помечаем на сверку.
             _flag_coord(s, "Источники расходятся — проверьте адрес на карте.", r)
             continue
-        # Яндекс точнее: берём его координаты, помечаем на сверку, маршрут строим.
+        # Яндекс дал тот же адрес с другой координатой — доверяем ему, помечаем на сверку.
         s.geo.lat, s.geo.lon = y.lat, y.lon
         r["lat"], r["lon"], r["coord_source"] = y.lat, y.lon, "yandex_crosscheck"
         _flag_coord(s, "Координата с Яндекс Карт — проверьте адрес на карте.", r)
@@ -379,6 +412,16 @@ def build_parser():
     d.set_defaults(func=cmd_doctor)
     gd = sub.add_parser("geocode-depot", help="Геокодировать фиксированную базу")
     gd.set_defaults(func=cmd_geocode_depot)
+    al = sub.add_parser("alias", help="Закрепить координату за адресом вручную")
+    al.add_argument("address", nargs="?", default="")
+    al.add_argument("--district", default="")
+    al.add_argument("--lat", type=float)
+    al.add_argument("--lon", type=float)
+    al.add_argument("--normalized", default="", help="как показывать адрес (по умолчанию — как в аргументе)")
+    al.add_argument("--note", default="")
+    al.add_argument("--list", action="store_true", help="показать все закрепления")
+    al.add_argument("--delete", action="store_true", help="удалить закрепление для address")
+    al.set_defaults(func=cmd_alias)
     plan = sub.add_parser("plan", help="Построить маршрут из XLSX/CSV")
     plan.add_argument("xlsx", help="Таблица .xlsx или .csv")
     plan.add_argument("--date", required=True)

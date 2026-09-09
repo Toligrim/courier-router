@@ -62,6 +62,42 @@ class Storage:
             raw=json.loads(row[7])
         )
 
+    def get_alias(self, address: str, district: str = "") -> GeoPoint | None:
+        row = self.con.execute(
+            "SELECT lat,lon,normalized_address,note FROM address_aliases WHERE alias=?",
+            (self.key(address, district),),
+        ).fetchone()
+        if not row:
+            return None
+        return GeoPoint(
+            lat=row[0], lon=row[1], provider="alias",
+            normalized_address=row[2] or address, precision="verified", confidence=1.0,
+            provider_ref=None, raw={"note": row[3] or "", "_resolver": {"status": "alias"}},
+        )
+
+    def put_alias(self, address: str, district: str, lat: float, lon: float,
+                  normalized_address: str = "", note: str = "") -> None:
+        self.con.execute(
+            """INSERT INTO address_aliases(alias,lat,lon,normalized_address,note)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(alias) DO UPDATE SET lat=excluded.lat, lon=excluded.lon,
+               normalized_address=excluded.normalized_address, note=excluded.note,
+               updated_at=CURRENT_TIMESTAMP""",
+            (self.key(address, district), lat, lon, normalized_address or address, note),
+        )
+        self.con.commit()
+
+    def delete_alias(self, address: str, district: str = "") -> int:
+        cur = self.con.execute("DELETE FROM address_aliases WHERE alias=?",
+                               (self.key(address, district),))
+        self.con.commit()
+        return cur.rowcount
+
+    def list_aliases(self) -> list[tuple]:
+        return self.con.execute(
+            "SELECT alias,lat,lon,normalized_address,note,updated_at "
+            "FROM address_aliases ORDER BY updated_at DESC").fetchall()
+
     def put_geocode(self, address: str, district: str, geo: GeoPoint):
         key = self.key(address, district)
         self.con.execute(
