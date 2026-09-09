@@ -28,15 +28,1351 @@ USERS_PATH = Path(os.getenv("WEB_USERS_PATH", "data/web/users.json"))
 MAX_UPLOAD_BYTES = int(os.getenv("WEB_MAX_UPLOAD_MB", "10")) * 1024 * 1024
 
 CSS = """
-:root{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#18212f;background:#f4f6f8}
-*{box-sizing:border-box}body{margin:0}.top{height:60px;background:#111827;color:white;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:1000}.top a{color:white;text-decoration:none}.brand{font-weight:800}.wrap{max-width:1100px;margin:0 auto;padding:20px}.card{background:white;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(15,23,42,.08);margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{background:#f8fafc;border-radius:14px;padding:14px}.metric b{font-size:24px;display:block}.muted{color:#64748b}.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:12px;padding:12px 16px;background:#2563eb;color:white;text-decoration:none;font-weight:700;cursor:pointer}.btn.secondary{background:#e2e8f0;color:#0f172a}.btn.danger{background:#334155}.btn.del{background:#fee2e2;color:#b91c1c;font-weight:700;padding:12px 14px}.btn.del:hover{background:#fecaca}.field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}.field input,.field select{width:100%;border:1px solid #cbd5e1;border-radius:12px;padding:12px;font-size:16px}.upload{border:2px dashed #94a3b8;border-radius:18px;padding:28px;text-align:center;background:#f8fafc}.error{background:#fee2e2;color:#991b1b;border-radius:12px;padding:12px;margin-bottom:14px}.run{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid #e2e8f0;padding:14px 0}.run:first-child{border-top:0}.route-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(340px,.8fr);gap:16px}.map{height:72vh;min-height:520px;border-radius:18px;overflow:hidden}.stops{max-height:72vh;overflow:auto}.stop{border:1px solid #e2e8f0;border-radius:16px;padding:14px;margin-bottom:10px;background:white}.seq{display:inline-flex;width:30px;height:30px;border-radius:50%;align-items:center;justify-content:center;background:#111827;color:white;font-weight:800;margin-right:8px}.stop h3{margin:0 0 8px}.stop p{margin:5px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700}.pill.warn{background:#fef3c7;color:#92400e}.note{margin:6px 0;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;color:#92400e;font-size:13px}.login{max-width:420px;margin:10vh auto}.leaflet-div-icon{background:transparent!important;border:0!important}.marker-num{width:34px;height:34px;border-radius:50%;background:#111827;color:white;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,.35);font-weight:800}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}@media(max-width:800px){.wrap{padding:12px}.grid{grid-template-columns:1fr}.route-layout{grid-template-columns:1fr}.map{height:55vh;min-height:360px}.stops{max-height:none}.top{height:54px}.card{border-radius:14px;padding:14px}}
+:root {
+  --color-scheme: light;
+  --transparent: transparent;
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #edf0f4;
+  --surface-elevated: #ffffff;
+  --ink: #15191f;
+  --muted: #68707d;
+  --line: #dde1e7;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-ink: #ffffff;
+  --ok: #18794a;
+  --ok-soft: #e6f5ed;
+  --warn: #a96000;
+  --warn-soft: #fff2cf;
+  --danger: #c53131;
+  --danger-soft: #fdeaea;
+  --pickup: #218653;
+  --pickup-soft: #e6f5ed;
+  --delivery: #bf670a;
+  --delivery-soft: #fff0df;
+  --marker-ink: #ffffff;
+  --focus: #7aa7ff;
+  --overlay: rgba(10, 14, 20, 0.58);
+  --shadow: 0 12px 34px rgba(15, 23, 42, 0.08);
+  --shadow-float: 0 18px 48px rgba(15, 23, 42, 0.18);
+  --map-filter: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-scheme: dark;
+    --bg: #0d1015;
+    --surface: #151a21;
+    --surface-2: #1b212a;
+    --surface-3: #232a35;
+    --surface-elevated: #1a2029;
+    --ink: #f2f4f7;
+    --muted: #a7afbb;
+    --line: #303846;
+    --accent: #72a6ff;
+    --accent-hover: #8bb5ff;
+    --accent-ink: #07111f;
+    --ok: #58cb8d;
+    --ok-soft: #173425;
+    --warn: #efb44f;
+    --warn-soft: #3a2d14;
+    --danger: #ff7b7b;
+    --danger-soft: #3d1f23;
+    --pickup: #4ebb7d;
+    --pickup-soft: #183728;
+    --delivery: #f2a24b;
+    --delivery-soft: #3b2a17;
+    --marker-ink: #08120d;
+    --focus: #9bbcff;
+    --overlay: rgba(0, 0, 0, 0.72);
+    --shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+    --shadow-float: 0 18px 48px rgba(0, 0, 0, 0.42);
+    --map-filter: brightness(0.72) contrast(1.08) saturate(0.78);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  color-scheme: var(--color-scheme);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+input,
+select,
+a,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+summary,
+a {
+  touch-action: manipulation;
+}
+
+a {
+  color: var(--accent);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--ink);
+  text-wrap: balance;
+}
+
+h1 {
+  margin-bottom: 8px;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 780;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin-bottom: 12px;
+  font-size: 17px;
+  line-height: 1.3;
+  font-weight: 760;
+}
+
+h3 {
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 740;
+}
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  min-height: calc(48px + env(safe-area-inset-top));
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: env(safe-area-inset-top) 16px 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.brand,
+.top-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.brand {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.account {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.account-name {
+  max-width: 124px;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-link {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 16px 16px 24px;
+}
+
+.card {
+  min-width: 0;
+  margin-bottom: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.lead {
+  margin-bottom: 18px;
+  color: var(--muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.field label,
+.field-label {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.btn {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 16px;
+  border: 1px solid var(--transparent);
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease, border-color 140ms ease;
+}
+
+.btn:hover {
+  background: var(--accent-hover);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.segment-btn:focus-visible,
+.menu-danger:focus-visible,
+.stop:focus-visible,
+.upload:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.btn.secondary {
+  border-color: var(--line);
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.btn.secondary:hover {
+  background: var(--surface-2);
+}
+
+.btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.check-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.check-row input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.upload {
+  position: relative;
+  display: grid;
+  min-height: 170px;
+  place-items: center;
+  margin-bottom: 18px;
+  padding: 24px;
+  border: 2px dashed var(--line);
+  border-radius: 18px;
+  background: var(--surface-2);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.upload:hover,
+.upload.is-dragging,
+.upload.has-file {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+
+.upload.is-dragging {
+  transform: scale(0.995);
+}
+
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-content {
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  gap: 6px;
+}
+
+.upload-icon {
+  display: inline-flex;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 800;
+  box-shadow: var(--shadow);
+}
+
+.upload-title {
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 740;
+}
+
+.upload-hint,
+.upload-file-name {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.upload-file-name {
+  color: var(--ink);
+  font-weight: 680;
+}
+
+.error {
+  margin-bottom: 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--danger);
+  border-radius: 14px;
+  background: var(--danger-soft);
+  color: var(--ink);
+}
+
+.error-summary {
+  font-weight: 720;
+  overflow-wrap: anywhere;
+}
+
+.error details {
+  margin-top: 8px;
+}
+
+.error details summary {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.error pre {
+  max-height: 280px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.build-overlay[hidden] {
+  display: none;
+}
+
+.build-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: grid;
+  place-items: center;
+  padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
+  background: var(--overlay);
+}
+
+.build-overlay-card {
+  width: min(100%, 360px);
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface-elevated);
+  color: var(--ink);
+  text-align: center;
+  box-shadow: var(--shadow-float);
+}
+
+.spinner {
+  width: 38px;
+  height: 38px;
+  margin: 0 auto 16px;
+  border: 3px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.run-list {
+  display: grid;
+}
+
+.run {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.run:first-child {
+  border-top: 0;
+}
+
+.run-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.run-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 3px;
+}
+
+.run-title {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 740;
+}
+
+.run-meta {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.run-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-chip,
+.pill {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.2;
+}
+
+.status-chip.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.status-chip.review,
+.pill.review {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.status-chip.neutral,
+.pill.neutral {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.pill.pickup {
+  background: var(--pickup-soft);
+  color: var(--pickup);
+}
+
+.pill.delivery {
+  background: var(--delivery-soft);
+  color: var(--delivery);
+}
+
+.more-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.more-menu > summary {
+  list-style: none;
+}
+
+.more-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.icon-btn {
+  display: inline-flex;
+  width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-float);
+}
+
+.menu-popover form {
+  margin: 0;
+}
+
+.menu-danger {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--transparent);
+  color: var(--danger);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-danger:hover {
+  background: var(--danger-soft);
+}
+
+.login {
+  width: min(100%, 420px);
+  margin: max(6vh, calc(24px + env(safe-area-inset-top))) auto;
+  padding: 28px;
+}
+
+.login .btn {
+  width: 100%;
+}
+
+.login-badge {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  margin-bottom: 14px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.route-page {
+  min-width: 0;
+}
+
+.route-page.has-bottom-action {
+  padding-bottom: 82px;
+}
+
+.summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.route-meta {
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+
+.metric-label {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.metric-value {
+  display: block;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.route-status-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.route-summary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.navigator-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.view-switch {
+  display: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-3);
+}
+
+.segment-btn {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--transparent);
+  color: var(--muted);
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.segment-btn.is-active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.route-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.8fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.map-shell {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.map {
+  width: 100%;
+  height: 72vh;
+  min-height: 520px;
+  background: var(--surface-2);
+}
+
+.stops {
+  min-width: 0;
+  max-height: 72vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.stop {
+  min-width: 0;
+  margin-bottom: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  outline: 0;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  scroll-margin-top: 110px;
+}
+
+.stop:hover {
+  border-color: var(--accent);
+}
+
+.stop-heading-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.seq {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--marker-ink);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.seq.pickup {
+  background: var(--pickup);
+}
+
+.seq.delivery {
+  background: var(--delivery);
+}
+
+.stop-address {
+  min-width: 0;
+  margin: 1px 0 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
+}
+
+.raw-address {
+  margin: 6px 0 0 44px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.coord-note,
+.stop-warning {
+  margin: 8px 0;
+  padding: 9px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 11px;
+  background: var(--warn-soft);
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.stop-meta {
+  display: grid;
+  gap: 4px;
+  margin: 9px 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.stop-meta p,
+.stop-comment {
+  margin: 0;
+}
+
+.stop-comment {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.phone-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.stop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.stop-actions .btn {
+  flex: 1 1 170px;
+}
+
+.leaflet-div-icon {
+  border: 0 !important;
+  background: var(--transparent) !important;
+}
+
+.marker-num {
+  --marker-bg: var(--delivery);
+  display: flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid var(--surface-elevated);
+  border-radius: 50%;
+  outline: 0 solid var(--transparent);
+  background: var(--marker-bg);
+  color: var(--marker-ink);
+  box-shadow: var(--shadow-float);
+  font-size: 13px;
+  font-weight: 840;
+}
+
+.marker-num.pickup {
+  --marker-bg: var(--pickup);
+}
+
+.marker-num.delivery {
+  --marker-bg: var(--delivery);
+}
+
+.marker-num.review {
+  outline: 4px solid var(--warn);
+  outline-offset: 1px;
+}
+
+.leaflet-tile-pane {
+  filter: var(--map-filter);
+}
+
+.leaflet-control-zoom a,
+.leaflet-control-attribution,
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  border-color: var(--line) !important;
+  background: var(--surface-elevated) !important;
+  color: var(--ink) !important;
+}
+
+.leaflet-control-zoom a {
+  color: var(--ink) !important;
+}
+
+.leaflet-control-attribution a,
+.leaflet-popup-content a {
+  color: var(--accent) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  box-shadow: var(--shadow-float);
+}
+
+.bottom-action {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1200;
+  padding: 10px calc(16px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.bottom-action-inner {
+  display: flex;
+  max-width: 1120px;
+  margin: 0 auto;
+  justify-content: flex-end;
+}
+
+.bottom-action .btn {
+  min-width: 320px;
+}
+
+.empty-state {
+  padding: 20px 0 4px;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 800px) {
+  .wrap {
+    padding: 12px 12px 20px;
+  }
+
+  .card {
+    padding: 14px;
+    border-radius: 17px;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .upload {
+    min-height: 154px;
+    padding: 20px 14px;
+  }
+
+  .run {
+    align-items: flex-start;
+  }
+
+  .run-actions .btn {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .summary-head {
+    align-items: center;
+  }
+
+  .view-switch {
+    position: sticky;
+    top: calc(52px + env(safe-area-inset-top));
+    z-index: 850;
+    display: grid;
+  }
+
+  .route-layout {
+    display: block;
+  }
+
+  .route-page[data-route-view="list"] [data-route-pane="map"] {
+    display: none;
+  }
+
+  .route-page[data-route-view="map"] [data-route-pane="list"] {
+    display: none;
+  }
+
+  .map {
+    height: calc(100dvh - 190px);
+    min-height: 390px;
+    max-height: 660px;
+  }
+
+  .stops {
+    max-height: none;
+    overflow: visible;
+    scrollbar-gutter: auto;
+  }
+
+  .stop {
+    padding: 13px;
+  }
+
+  .raw-address {
+    margin-left: 44px;
+  }
+
+  .bottom-action .btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .metric-value {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 420px) {
+  .account-name {
+    display: none;
+  }
+
+  .metric {
+    padding: 12px;
+  }
+
+  .run-actions .btn {
+    font-size: 13px;
+  }
+
+  .stop-actions .btn {
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
 """
+
+HOME_JS = """<script>
+(() => {
+  const form = document.getElementById('route-form');
+  const input = document.getElementById('route-file');
+  const zone = document.getElementById('drop-zone');
+  const fileName = document.getElementById('selected-file');
+  const submit = document.getElementById('build-submit');
+  const overlay = document.getElementById('build-overlay');
+  if (!form || !input || !zone || !fileName || !submit || !overlay) return;
+
+  const syncFileState = () => {
+    const file = input.files && input.files[0];
+    submit.disabled = !file;
+    zone.classList.toggle('has-file', Boolean(file));
+    fileName.textContent = file ? file.name : 'Файл пока не выбран';
+  };
+
+  input.addEventListener('change', syncFileState);
+
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    zone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      zone.classList.add('is-dragging');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach((eventName) => {
+    zone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      zone.classList.remove('is-dragging');
+    });
+  });
+
+  zone.addEventListener('drop', (event) => {
+    const files = event.dataTransfer && event.dataTransfer.files;
+    if (!files || !files.length) return;
+    try {
+      input.files = files;
+    } catch (_) {
+      return;
+    }
+    syncFileState();
+  });
+
+  form.addEventListener('submit', (event) => {
+    if (!input.files || !input.files.length) {
+      event.preventDefault();
+      syncFileState();
+      return;
+    }
+    submit.disabled = true;
+    overlay.hidden = false;
+  });
+
+  window.addEventListener('pageshow', () => {
+    overlay.hidden = true;
+    syncFileState();
+  });
+
+  syncFileState();
+})();
+</script>"""
+
+ROUTE_JS = """<script>
+(() => {
+  const routeRoot = document.querySelector('.route-page');
+  const routeData = document.getElementById('route-data');
+  const mapElement = document.getElementById('map');
+  if (!routeRoot || !routeData || !mapElement || typeof L === 'undefined') return;
+
+  const route = JSON.parse(routeData.textContent);
+  const visits = route.visits || [];
+  const geometry = route.geometry || [];
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const map = L.map('map', {zoomControl: true});
+  const markers = new Map();
+  const bounds = [];
+
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  if (geometry.length) {
+    const line = geometry.map((point) => [point[0], point[1]]);
+    L.polyline(line, {weight: 5, opacity: 0.75}).addTo(map);
+    line.forEach((point) => bounds.push(point));
+  }
+
+  const escapeHtml = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+
+  const formatMinute = (minute) => {
+    const hours = String(Math.floor(minute / 60) % 24).padStart(2, '0');
+    const minutes = String(minute % 60).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
+  const fitRoute = () => {
+    map.invalidateSize(false);
+    if (bounds.length) {
+      map.fitBounds(bounds, {padding: [28, 28], animate: !reducedMotion});
+    } else {
+      map.setView([59.94, 30.31], 10, {animate: false});
+    }
+  };
+
+  const setRouteView = (view, {fit = true} = {}) => {
+    routeRoot.dataset.routeView = view;
+    document.querySelectorAll('[data-route-switch]').forEach((button) => {
+      const active = button.dataset.routeSwitch === view;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    if (view === 'map') {
+      requestAnimationFrame(() => {
+        map.invalidateSize(false);
+        if (fit) fitRoute();
+      });
+    }
+  };
+
+  visits.forEach((visit) => {
+    const stop = visit.stop || {};
+    const operation = stop.operation === 'pickup' ? 'pickup' : 'delivery';
+    const reviewClass = stop.coord_status === 'review' ? ' review' : '';
+    const icon = L.divIcon({
+      className: 'leaflet-div-icon',
+      html: `<div class="marker-num ${operation}${reviewClass}">${escapeHtml(visit.sequence)}</div>`,
+      iconSize: [36, 36],
+      iconAnchor: [18, 18]
+    });
+    const marker = L.marker([stop.lat, stop.lon], {icon}).addTo(map);
+    const address = stop.address_normalized || stop.address_raw || '';
+    marker.bindPopup(
+      `<b>${escapeHtml(visit.sequence)}. ${escapeHtml(address)}</b><br>` +
+      `ETA ${formatMinute(visit.arrival_min)}<br>` +
+      `Заказ №${escapeHtml(stop.order_no)}`
+    );
+    marker.on('click', () => {
+      setRouteView('list', {fit: false});
+      requestAnimationFrame(() => {
+        const card = document.getElementById(`stop-${visit.sequence}`);
+        card?.scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'center'});
+      });
+    });
+    markers.set(String(visit.sequence), marker);
+    bounds.push([stop.lat, stop.lon]);
+  });
+
+  document.querySelectorAll('[data-route-switch]').forEach((button) => {
+    button.addEventListener('click', () => setRouteView(button.dataset.routeSwitch));
+  });
+
+  const focusStop = (card) => {
+    const marker = markers.get(String(card.dataset.sequence));
+    if (!marker) return;
+    setRouteView('map', {fit: false});
+    window.setTimeout(() => {
+      map.invalidateSize(false);
+      map.setView(marker.getLatLng(), 16, {animate: !reducedMotion});
+      marker.openPopup();
+    }, 40);
+  };
+
+  document.querySelectorAll('.stop[data-sequence]').forEach((card) => {
+    card.addEventListener('click', (event) => {
+      if (event.target.closest('a, button, summary, details, input, select, label')) return;
+      focusStop(card);
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      focusStop(card);
+    });
+  });
+
+  if (bounds.length) {
+    map.fitBounds(bounds, {padding: [28, 28], animate: false});
+  } else {
+    map.setView([59.94, 30.31], 10, {animate: false});
+  }
+
+  setRouteView('list', {fit: false});
+})();
+</script>"""
 
 
 def _shell(title: str, body: str, user: str | None = None, head: str = "") -> str:
-    auth = f'<span>{html.escape(user)} · <a href="/logout">Выйти</a></span>' if user else ""
-    top = f'<header class="top"><a class="brand" href="/">Courier Router</a>{auth}</header>' if user else ""
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{html.escape(title)}</title><style>{CSS}</style>{head}</head><body>{top}<main class="wrap">{body}</main></body></html>"""
+    auth = (
+        f'<div class="account"><span class="account-name">{html.escape(user)}</span>'
+        f'<a class="top-link" href="/logout">Выйти</a></div>'
+        if user else ""
+    )
+    top = (
+        f'<header class="top"><a class="brand" href="/">Courier Router</a>{auth}</header>'
+        if user else ""
+    )
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{html.escape(title)}</title>
+{head}
+<style>{CSS}</style>
+</head>
+<body>
+{top}
+<main class="wrap">{body}</main>
+</body>
+</html>"""
 
 
 def _hash_password(password: str) -> str:
@@ -133,9 +1469,51 @@ def _find_run_folder(user: str, run_id: str) -> Path | None:
     return None
 
 
+def _plain_error(error: str) -> str:
+    return f'<div class="error" role="alert"><div class="error-summary">{html.escape(error)}</div></div>' if error else ""
+
+
+def _build_error(error: str) -> str:
+    if not error:
+        return ""
+    raw = str(error).strip()
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    summary = lines[0] if lines else raw
+    for line in lines:
+        if "ERROR:" in line:
+            summary = line[line.index("ERROR:"):]
+            break
+    details = ""
+    if len(lines) > 1 or summary != raw:
+        details = (
+            '<details><summary>Подробности</summary>'
+            f'<pre>{html.escape(raw)}</pre></details>'
+        )
+    return (
+        '<div class="error" role="alert">'
+        f'<div class="error-summary">{html.escape(summary)}</div>{details}</div>'
+    )
+
+
 def _login_page(error: str = "") -> str:
-    err = f'<div class="error">{html.escape(error)}</div>' if error else ""
-    body = f"""<div class="login card"><h1>Courier Router</h1><p class="muted">Закрытый планировщик маршрутов</p>{err}<form method="post" action="/login"><div class="field"><label>Логин</label><input name="username" autocomplete="username" required autofocus></div><div class="field"><label>Пароль</label><input type="password" name="password" autocomplete="current-password" required></div><button class="btn" type="submit">Войти</button></form></div>"""
+    err = _plain_error(error)
+    body = f"""<div class="login card">
+<span class="login-badge">Доступ через VPN</span>
+<h1>Courier Router</h1>
+<p class="lead">Закрытый планировщик маршрутов доставки.</p>
+{err}
+<form method="post" action="/login">
+  <div class="field">
+    <label for="username">Логин</label>
+    <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+  </div>
+  <div class="field">
+    <label for="password">Пароль</label>
+    <input id="password" type="password" name="password" autocomplete="current-password" required>
+  </div>
+  <button class="btn" type="submit">Войти</button>
+</form>
+</div>"""
     return _shell("Вход", body)
 
 
@@ -146,74 +1524,142 @@ def _list_runs(user: str) -> list[dict]:
     items: list[dict] = []
     seen: set[str] = set()
 
+    def append_run(folder: Path, meta: dict) -> None:
+        route_path = folder / "route.json"
+        if not route_path.exists():
+            return
+        try:
+            route = json.loads(route_path.read_text(encoding="utf-8"))
+            summary = route.get("summary", {})
+            visits = route.get("visits", [])
+            review_count = sum(
+                1 for visit in visits
+                if visit.get("stop", {}).get("coord_status") == "review"
+            )
+            items.append({
+                "id": folder.name,
+                "meta": meta,
+                "summary": summary,
+                "count": len(visits),
+                "review_count": review_count,
+                "mtime": folder.stat().st_mtime,
+            })
+        except (OSError, ValueError, TypeError):
+            return
+
     user_root = _user_runs_root(user)
     if user_root.exists():
         for folder in user_root.iterdir():
             if not folder.is_dir():
                 continue
             meta = _owned_meta(folder, user)
-            route_path = folder / "route.json"
-            if meta is None or not route_path.exists():
+            if meta is None:
                 continue
-            try:
-                route = json.loads(route_path.read_text(encoding="utf-8"))
-                summary = route.get("summary", {})
-                items.append({
-                    "id": folder.name,
-                    "meta": meta,
-                    "summary": summary,
-                    "count": len(route.get("visits", [])),
-                    "mtime": folder.stat().st_mtime,
-                })
-                seen.add(folder.name)
-            except (OSError, ValueError, TypeError):
-                continue
+            append_run(folder, meta)
+            seen.add(folder.name)
 
     for folder in RUNS_ROOT.iterdir():
         if not folder.is_dir() or folder.name.startswith("_") or folder.name in seen:
             continue
         meta = _owned_meta(folder, user)
-        route_path = folder / "route.json"
-        if meta is None or not route_path.exists():
+        if meta is None:
             continue
-        try:
-            route = json.loads(route_path.read_text(encoding="utf-8"))
-            summary = route.get("summary", {})
-            items.append({
-                "id": folder.name,
-                "meta": meta,
-                "summary": summary,
-                "count": len(route.get("visits", [])),
-                "mtime": folder.stat().st_mtime,
-            })
-        except (OSError, ValueError, TypeError):
-            continue
+        append_run(folder, meta)
 
     return sorted(items, key=lambda x: x["mtime"], reverse=True)[:30]
 
 
+def _plural_ru(number: int, one: str, few: str, many: str) -> str:
+    value = abs(int(number)) % 100
+    if 11 <= value <= 14:
+        return many
+    value %= 10
+    if value == 1:
+        return one
+    if 2 <= value <= 4:
+        return few
+    return many
+
+
 def _home_page(user: str, error: str = "") -> str:
-    err = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    err = _build_error(error)
     runs_html = ""
     for run in _list_runs(user):
         km = run["summary"].get("total_distance_m", 0) / 1000
         rid = html.escape(str(run["id"]))
         d = html.escape(run["meta"].get("date", ""))
-        runs_html += (
-            f'<div class="run"><div><b>{d}</b>'
-            f'<div class="muted">{run["count"]} точек · {km:.1f} км · старт '
-            f'{html.escape(run["meta"].get("depart",""))}</div></div>'
-            f'<div style="display:flex;gap:8px;align-items:center">'
-            f'<a class="btn secondary" href="/routes/{rid}">Открыть</a>'
-            f'<form method="post" action="/routes/{rid}/delete" style="margin:0" '
-            f'onsubmit="return confirm(\'Удалить маршрут за {d}?\')">'
-            f'<button class="btn del" type="submit" title="Удалить">✕</button></form>'
-            f'</div></div>'
+        depart = html.escape(run["meta"].get("depart", ""))
+        review_count = int(run.get("review_count", 0))
+        status = (
+            f'<span class="status-chip review">⚠ {review_count} на сверку</span>'
+            if review_count else '<span class="status-chip ok">✓ ок</span>'
         )
+        runs_html += f"""<div class="run">
+<div class="run-main">
+  <div class="run-title-row"><span class="run-title">{d}</span>{status}</div>
+  <div class="run-meta">{run['count']} {_plural_ru(run['count'], 'точка', 'точки', 'точек')} · {km:.1f} км · старт {depart}</div>
+</div>
+<div class="run-actions">
+  <a class="btn secondary" href="/routes/{rid}">Открыть</a>
+  <details class="more-menu">
+    <summary class="icon-btn" aria-label="Действия с маршрутом">···</summary>
+    <div class="menu-popover">
+      <form method="post" action="/routes/{rid}/delete" onsubmit="return confirm('Удалить маршрут за {d}? Отменить нельзя.')">
+        <button class="menu-danger" type="submit">Удалить маршрут</button>
+      </form>
+    </div>
+  </details>
+</div>
+</div>"""
     if not runs_html:
-        runs_html = '<p class="muted">Пока нет рассчитанных маршрутов.</p>'
+        runs_html = '<div class="empty-state">Пока нет рассчитанных маршрутов.</div>'
     today = date.today().isoformat()
-    body = f"""{err}<section class="card"><h1>Новый маршрут</h1><p class="muted">Загрузите таблицу в том же формате, что используется CLI. Поддерживаются XLSX и CSV.</p><form method="post" action="/routes" enctype="multipart/form-data"><div class="upload field"><label><b>Файл с заказами</b></label><input type="file" name="table" accept=".xlsx,.csv" required></div><div class="grid"><div class="field"><label>Дата</label><input type="date" name="day" value="{today}" required></div><div class="field"><label>Старт</label><input type="time" name="depart" value="10:00" required></div><div class="field"><label>Финиш</label><select name="end"><option value="open" selected>Последняя точка</option><option value="depot">Вернуться на базу</option></select></div></div><label><input type="checkbox" name="allow_low_confidence" value="1"> Разрешить точки с низкой точностью геокодирования</label><div class="toolbar"><button class="btn" type="submit">Построить маршрут</button></div></form></section><section class="card"><h2>Мои последние маршруты</h2>{runs_html}</section>"""
+    body = f"""{err}
+<section class="card">
+  <h1>Новый маршрут</h1>
+  <p class="lead">Загрузите XLSX или CSV с заказами. После запуска расчёт может занять до минуты.</p>
+  <form id="route-form" method="post" action="/routes" enctype="multipart/form-data">
+    <label class="upload" id="drop-zone" for="route-file">
+      <input class="file-input" id="route-file" type="file" name="table" accept=".xlsx,.csv" required>
+      <span class="upload-content">
+        <span class="upload-icon" aria-hidden="true">↑</span>
+        <span class="upload-title">Выберите таблицу</span>
+        <span class="upload-hint">Нажмите сюда или перетащите файл</span>
+        <span class="upload-file-name" id="selected-file">Файл пока не выбран</span>
+      </span>
+    </label>
+    <div class="form-grid">
+      <div class="field">
+        <label for="route-day">Дата</label>
+        <input id="route-day" type="date" name="day" value="{today}" required>
+      </div>
+      <div class="field">
+        <label for="route-depart">Старт</label>
+        <input id="route-depart" type="time" name="depart" value="10:00" required>
+      </div>
+      <div class="field">
+        <label for="route-end">Финиш</label>
+        <select id="route-end" name="end">
+          <option value="open" selected>Последняя точка</option>
+          <option value="depot">Вернуться на базу</option>
+        </select>
+      </div>
+    </div>
+    <label class="check-row"><input type="checkbox" name="allow_low_confidence" value="1">Разрешить точки с низкой точностью геокодирования</label>
+    <div class="toolbar"><button class="btn" id="build-submit" type="submit" disabled>Построить маршрут</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>Мои последние маршруты</h2>
+  <div class="run-list">{runs_html}</div>
+</section>
+<div class="build-overlay" id="build-overlay" role="status" aria-live="polite" aria-busy="true" hidden>
+  <div class="build-overlay-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <h2>Строю маршрут, это займёт до минуты</h2>
+    <p class="muted">Не закрывайте страницу.</p>
+  </div>
+</div>""" + HOME_JS
     return _shell("Маршруты", body, user)
 
 
@@ -223,68 +1669,160 @@ def _hhmm(minute: int) -> str:
 
 def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     if not route.get("feasible"):
-        warnings = "<br>".join(html.escape(x) for x in route.get("warnings", []))
-        return _shell("Маршрут не построен", f'<div class="card"><h1>Маршрут не построен</h1><div class="error">{warnings}</div><a class="btn secondary" href="/">Назад</a></div>', user)
+        warnings = route.get("warnings", [])
+        warnings_html = "".join(f"<p>{html.escape(str(item))}</p>" for item in warnings)
+        if not warnings_html:
+            warnings_html = "<p>Не удалось составить маршрут с текущими ограничениями.</p>"
+        body = f"""<section class="card">
+<h1>Маршрут не построен</h1>
+<p class="lead">Проверьте исходные данные и ограничения по времени.</p>
+<div class="error" role="alert">{warnings_html}</div>
+<a class="btn secondary" href="/">← К загрузке</a>
+</section>"""
+        return _shell("Маршрут не построен", body, user)
+
     summary = route.get("summary", {})
+    visits = route.get("visits", [])
     km = summary.get("total_distance_m", 0) / 1000
     travel = round(summary.get("total_travel_sec", 0) / 60)
-    waiting = round(summary.get("total_wait_sec", 0) / 60)
+    review_count = sum(1 for visit in visits if visit.get("stop", {}).get("coord_status") == "review")
     stops_html = ""
-    for visit in route.get("visits", []):
+
+    for visit in visits:
         stop = visit["stop"]
         lat, lon = stop["lat"], stop["lon"]
         address = stop.get("address_normalized") or stop.get("address_raw") or ""
-        nav = f"https://yandex.ru/maps/?rtext=~{lat}%2C{lon}&rtt=auto"
-        operation = "Забор" if stop.get("operation") == "pickup" else "Доставка"
-        phone = html.escape(stop.get("phone") or "")
-        phone_html = f'<p><a href="tel:{quote(stop.get("phone") or "")}">{phone}</a></p>' if phone else ""
+        nav = html.escape(f"https://yandex.ru/maps/?rtext=~{lat}%2C{lon}&rtt=auto", quote=True)
+        is_pickup = stop.get("operation") == "pickup"
+        operation = "Забор" if is_pickup else "Доставка"
+        operation_class = "pickup" if is_pickup else "delivery"
+        phone_raw = stop.get("phone") or ""
+        phone = html.escape(phone_raw)
+        phone_html = (
+            f'<p><a class="phone-link" href="tel:{quote(phone_raw)}">☎ {phone}</a></p>'
+            if phone else ""
+        )
         window = html.escape(stop.get("window") or "нет")
         payment = html.escape(stop.get("payment") or "")
+        comment = html.escape(stop.get("comment") or "")
         raw_addr = stop.get("address_raw") or ""
-        raw_html = (f'<p class="muted" style="margin-top:-4px">в таблице: {html.escape(raw_addr)}</p>'
-                    if raw_addr and raw_addr.strip().lower() not in address.strip().lower() else "")
+        raw_html = (
+            f'<p class="raw-address">в таблице: {html.escape(raw_addr)}</p>'
+            if raw_addr and raw_addr.strip().casefold() != address.strip().casefold() else ""
+        )
         review = stop.get("coord_status") == "review"
-        review_pill = ' <span class="pill warn">⚠ проверить координаты</span>' if review else ""
+        review_pill = '<span class="pill review">⚠ проверить координаты</span>' if review else ""
         note = html.escape(stop.get("coord_note") or "")
-        note_html = f'<p class="note">{note}</p>' if review and note else ""
-        stops_html += f"""<article class="stop" id="stop-{visit['sequence']}"><h3><span class="seq">{visit['sequence']}</span>{html.escape(address)}</h3>{raw_html}<p><span class="pill">ETA {_hhmm(visit['arrival_min'])}</span> <span class="pill">{operation}</span>{review_pill}</p>{note_html}<p>Заказ №{html.escape(str(stop.get('order_no','')))} · окно {window}</p>{phone_html}{f'<p>Оплата: {payment}</p>' if payment else ''}<p class="muted">От предыдущей: {visit['distance_m_from_prev']/1000:.1f} км · {round(visit['travel_sec_from_prev']/60)} мин</p><a class="btn" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a></article>"""
+        note_html = f'<p class="coord-note">{note}</p>' if review and note else ""
+        warnings_html = "".join(
+            f'<p class="stop-warning">⚠ {html.escape(str(warning))}</p>'
+            for warning in stop.get("warnings", []) if warning
+        )
+        comment_html = (
+            f'<p class="stop-comment"><span class="muted">Комментарий:</span> {comment}</p>'
+            if comment else ""
+        )
+        late_by = int(visit.get("late_by_min", 0) or 0)
+        late_html = f'<span class="pill review">опоздание {late_by} мин</span>' if late_by > 0 else ""
+        stops_html += f"""<article class="stop" id="stop-{visit['sequence']}" data-sequence="{visit['sequence']}" tabindex="0" role="button" aria-label="Показать точку {visit['sequence']} на карте">
+  <div class="stop-heading-row">
+    <span class="seq {operation_class}">{visit['sequence']}</span>
+    <h3 class="stop-address">{html.escape(address)}</h3>
+  </div>
+  {raw_html}
+  <div class="pill-row">
+    <span class="pill neutral">ETA {_hhmm(visit['arrival_min'])}</span>
+    <span class="pill {operation_class}">{operation}</span>
+    {review_pill}
+    {late_html}
+  </div>
+  {note_html}
+  {warnings_html}
+  <div class="stop-meta">
+    <p>Заказ №{html.escape(str(stop.get('order_no', '')))} · окно {window}</p>
+    {phone_html}
+    {f'<p>Оплата: {payment}</p>' if payment else ''}
+    <p class="muted">От предыдущей: {visit['distance_m_from_prev'] / 1000:.1f} км · {round(visit['travel_sec_from_prev'] / 60)} мин</p>
+  </div>
+  {comment_html}
+  <div class="stop-actions"><a class="btn secondary" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a></div>
+</article>"""
+
     data = json.dumps(route, ensure_ascii=False).replace("</", "<\\/")
 
     # Одна ссылка на весь маршрут для приложения «Яндекс Карты / Навигатор» на iOS.
     navi_url = ""
-    visits = route.get("visits", [])
     geom = route.get("geometry") or []
     if visits and geom:
         from .navlinks import RoutePoint, build_yandex_url
         d_lat, d_lon = geom[0][0], geom[0][1]
         pts = [RoutePoint("start", "База", d_lat, d_lon)]
-        for v in visits:
-            st = v["stop"]
-            pts.append(RoutePoint("via", st.get("address_normalized") or st.get("address_raw") or "",
-                                  st["lat"], st["lon"], str(st.get("order_no", ""))))
+        for visit in visits:
+            stop = visit["stop"]
+            pts.append(RoutePoint(
+                "via",
+                stop.get("address_normalized") or stop.get("address_raw") or "",
+                stop["lat"],
+                stop["lon"],
+                str(stop.get("order_no", "")),
+            ))
         if meta.get("end", "depot") == "depot":
             pts.append(RoutePoint("finish", "База", d_lat, d_lon))
         if len(pts) >= 2:
             navi_url = build_yandex_url(pts)
-    navi_html = (
-        f'<a class="btn" href="{navi_url}">🧭 Весь маршрут в Яндекс Навигаторе</a>'
-        f'<p class="muted" style="margin:4px 0 0">Откроется приложение на телефоне. '
-        f'Яндекс считает переходы по ссылке: ~5 за 24 ч, дальше откроет веб-версию.</p>'
+
+    review_status = (
+        f'<span class="status-chip review">⚠ {review_count} на сверку</span>'
+        if review_count else '<span class="status-chip ok">✓ координаты без пометок</span>'
+    )
+    route_class = "route-page has-bottom-action" if navi_url else "route-page"
+    safe_navi_url = html.escape(navi_url, quote=True)
+    navigator_note = (
+        '<p class="navigator-note">Главная кнопка закреплена снизу, чтобы маршрут можно было открыть одной рукой.</p>'
+        if navi_url else ""
+    )
+    bottom_action = (
+        f'<div class="bottom-action"><div class="bottom-action-inner"><a class="btn" href="{safe_navi_url}">🧭 Открыть в Навигаторе</a></div></div>'
         if navi_url else ""
     )
 
     head = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-    body = f"""<section class="card"><h1>Маршрут на {html.escape(meta.get('date',''))}</h1><div class="grid"><div class="metric"><span class="muted">Точек</span><b>{len(route.get('visits',[]))}</b></div><div class="metric"><span class="muted">Пробег</span><b>{km:.1f} км</b></div><div class="metric"><span class="muted">Движение / ожидание</span><b>{travel} / {waiting} мин</b></div></div>{navi_html}<div class="toolbar"><a class="btn secondary" href="/">← К загрузке</a><a class="btn secondary" href="/routes/{run_id}/itinerary">Маршрут текстом</a><form method="post" action="/routes/{run_id}/delete" style="margin:0" onsubmit="return confirm('Удалить этот маршрут? Отменить нельзя.')"><button class="btn del" type="submit">Удалить маршрут</button></form></div></section><div class="route-layout"><div id="map" class="map card"></div><div class="stops">{stops_html}</div></div><script id="route-data" type="application/json">{data}</script>""" + """<script>
-const route=JSON.parse(document.getElementById('route-data').textContent);
-const visits=route.visits||[]; const geometry=route.geometry||[];
-const map=L.map('map',{zoomControl:true});
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
-const bounds=[];
-if(geometry.length){const line=geometry.map(p=>[p[0],p[1]]);L.polyline(line,{weight:5,opacity:.75}).addTo(map);line.forEach(p=>bounds.push(p));}
-visits.forEach(v=>{const s=v.stop;const icon=L.divIcon({className:'leaflet-div-icon',html:`<div class="marker-num">${v.sequence}</div>`,iconSize:[34,34],iconAnchor:[17,17]});const m=L.marker([s.lat,s.lon],{icon}).addTo(map);m.bindPopup(`<b>${v.sequence}. ${s.address_normalized||s.address_raw}</b><br>ETA ${String(Math.floor(v.arrival_min/60)%24).padStart(2,'0')}:${String(v.arrival_min%60).padStart(2,'0')}<br>Заказ №${s.order_no}`);m.on('click',()=>document.getElementById(`stop-${v.sequence}`)?.scrollIntoView({behavior:'smooth',block:'center'}));bounds.push([s.lat,s.lon]);});
-if(bounds.length) map.fitBounds(bounds,{padding:[30,30]}); else map.setView([59.94,30.31],10);
-</script>"""
-    return _shell(f"Маршрут {meta.get('date','')}", body, user, head)
+    body = f"""<div class="{route_class}" data-route-view="list">
+<section class="card">
+  <div class="summary-head">
+    <div>
+      <h1>Маршрут на {html.escape(meta.get('date', ''))}</h1>
+      <div class="route-meta">Старт {html.escape(meta.get('depart', ''))} · {'возврат на базу' if meta.get('end', 'depot') == 'depot' else 'финиш на последней точке'}</div>
+    </div>
+    <details class="more-menu">
+      <summary class="icon-btn" aria-label="Действия с маршрутом">···</summary>
+      <div class="menu-popover">
+        <form method="post" action="/routes/{run_id}/delete" onsubmit="return confirm('Удалить этот маршрут? Отменить нельзя.')">
+          <button class="menu-danger" type="submit">Удалить маршрут</button>
+        </form>
+      </div>
+    </details>
+  </div>
+  <div class="metric-grid">
+    <div class="metric"><span class="metric-label">Пробег</span><strong class="metric-value">{km:.1f} км</strong></div>
+    <div class="metric"><span class="metric-label">Время в пути</span><strong class="metric-value">{travel} мин</strong></div>
+  </div>
+  <div class="route-status-line"><span>{len(visits)} {_plural_ru(len(visits), 'точка', 'точки', 'точек')}, из них {review_count} на сверку</span>{review_status}</div>
+  {navigator_note}
+  <div class="route-summary-actions"><a class="btn secondary" href="/">← К загрузке</a></div>
+</section>
+<div class="view-switch" aria-label="Режим просмотра">
+  <button class="segment-btn is-active" type="button" data-route-switch="list" aria-pressed="true">Список</button>
+  <button class="segment-btn" type="button" data-route-switch="map" aria-pressed="false">Карта</button>
+</div>
+<div class="route-layout">
+  <div class="map-shell card" data-route-pane="map"><div id="map" class="map" aria-label="Карта маршрута"></div></div>
+  <div class="stops" data-route-pane="list">{stops_html}</div>
+</div>
+<script id="route-data" type="application/json">{data}</script>
+{bottom_action}
+</div>""" + ROUTE_JS
+    return _shell(f"Маршрут {meta.get('date', '')}", body, user, head)
 
 
 def create_app(session_secret: str | None = None) -> FastAPI:
