@@ -48,8 +48,12 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         lines += [
             f"   От предыдущей точки: {fmt_km(visit.distance_m_from_prev)} км · {round(visit.travel_sec_from_prev/60)} мин",
         ]
+        note = getattr(s, "coord_note", "")
+        if getattr(s, "coord_status", "ok") == "review" and note:
+            lines.append(f"   ⚠ {note}")
         for w in s.warnings:
-            lines.append(f"   ⚠ {w}")
+            if w != note:
+                lines.append(f"   ⚠ {w}")
         lines.append("")
 
     total = solution.total_travel_sec + solution.total_service_sec + solution.total_wait_sec

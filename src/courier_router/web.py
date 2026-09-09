@@ -1732,13 +1732,8 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
             if raw_addr and raw_addr.strip().casefold() != address.strip().casefold() else ""
         )
         review = stop.get("coord_status") == "review"
-        review_pill = '<span class="pill review">⚠ проверить координаты</span>' if review else ""
-        note = html.escape(stop.get("coord_note") or "")
-        note_html = f'<p class="coord-note">{note}</p>' if review and note else ""
-        warnings_html = "".join(
-            f'<p class="stop-warning">⚠ {html.escape(str(warning))}</p>'
-            for warning in stop.get("warnings", []) if warning
-        )
+        note = html.escape(stop.get("coord_note") or "Проверьте адрес на карте.")
+        note_html = f'<p class="coord-note">⚠ {note}</p>' if review else ""
         comment_html = (
             f'<p class="stop-comment"><span class="muted">Комментарий:</span> {comment}</p>'
             if comment else ""
@@ -1754,11 +1749,9 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
   <div class="pill-row">
     <span class="pill neutral">ETA {_hhmm(visit['arrival_min'])}</span>
     <span class="pill {operation_class}">{operation}</span>
-    {review_pill}
     {late_html}
   </div>
   {note_html}
-  {warnings_html}
   <div class="stop-meta">
     <p>Заказ №{html.escape(str(stop.get('order_no', '')))} · окно {window}</p>
     {phone_html}
