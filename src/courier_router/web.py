@@ -8,6 +8,7 @@ import html
 import json
 import os
 import secrets
+import shutil
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,7 +29,7 @@ MAX_UPLOAD_BYTES = int(os.getenv("WEB_MAX_UPLOAD_MB", "10")) * 1024 * 1024
 
 CSS = """
 :root{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#18212f;background:#f4f6f8}
-*{box-sizing:border-box}body{margin:0}.top{height:60px;background:#111827;color:white;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:1000}.top a{color:white;text-decoration:none}.brand{font-weight:800}.wrap{max-width:1100px;margin:0 auto;padding:20px}.card{background:white;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(15,23,42,.08);margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{background:#f8fafc;border-radius:14px;padding:14px}.metric b{font-size:24px;display:block}.muted{color:#64748b}.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:12px;padding:12px 16px;background:#2563eb;color:white;text-decoration:none;font-weight:700;cursor:pointer}.btn.secondary{background:#e2e8f0;color:#0f172a}.btn.danger{background:#334155}.field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}.field input,.field select{width:100%;border:1px solid #cbd5e1;border-radius:12px;padding:12px;font-size:16px}.upload{border:2px dashed #94a3b8;border-radius:18px;padding:28px;text-align:center;background:#f8fafc}.error{background:#fee2e2;color:#991b1b;border-radius:12px;padding:12px;margin-bottom:14px}.run{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid #e2e8f0;padding:14px 0}.run:first-child{border-top:0}.route-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(340px,.8fr);gap:16px}.map{height:72vh;min-height:520px;border-radius:18px;overflow:hidden}.stops{max-height:72vh;overflow:auto}.stop{border:1px solid #e2e8f0;border-radius:16px;padding:14px;margin-bottom:10px;background:white}.seq{display:inline-flex;width:30px;height:30px;border-radius:50%;align-items:center;justify-content:center;background:#111827;color:white;font-weight:800;margin-right:8px}.stop h3{margin:0 0 8px}.stop p{margin:5px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700}.pill.warn{background:#fef3c7;color:#92400e}.note{margin:6px 0;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;color:#92400e;font-size:13px}.login{max-width:420px;margin:10vh auto}.leaflet-div-icon{background:transparent!important;border:0!important}.marker-num{width:34px;height:34px;border-radius:50%;background:#111827;color:white;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,.35);font-weight:800}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}@media(max-width:800px){.wrap{padding:12px}.grid{grid-template-columns:1fr}.route-layout{grid-template-columns:1fr}.map{height:55vh;min-height:360px}.stops{max-height:none}.top{height:54px}.card{border-radius:14px;padding:14px}}
+*{box-sizing:border-box}body{margin:0}.top{height:60px;background:#111827;color:white;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:1000}.top a{color:white;text-decoration:none}.brand{font-weight:800}.wrap{max-width:1100px;margin:0 auto;padding:20px}.card{background:white;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(15,23,42,.08);margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{background:#f8fafc;border-radius:14px;padding:14px}.metric b{font-size:24px;display:block}.muted{color:#64748b}.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:12px;padding:12px 16px;background:#2563eb;color:white;text-decoration:none;font-weight:700;cursor:pointer}.btn.secondary{background:#e2e8f0;color:#0f172a}.btn.danger{background:#334155}.btn.del{background:#fee2e2;color:#b91c1c;font-weight:700;padding:12px 14px}.btn.del:hover{background:#fecaca}.field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}.field input,.field select{width:100%;border:1px solid #cbd5e1;border-radius:12px;padding:12px;font-size:16px}.upload{border:2px dashed #94a3b8;border-radius:18px;padding:28px;text-align:center;background:#f8fafc}.error{background:#fee2e2;color:#991b1b;border-radius:12px;padding:12px;margin-bottom:14px}.run{display:flex;justify-content:space-between;gap:14px;align-items:center;border-top:1px solid #e2e8f0;padding:14px 0}.run:first-child{border-top:0}.route-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(340px,.8fr);gap:16px}.map{height:72vh;min-height:520px;border-radius:18px;overflow:hidden}.stops{max-height:72vh;overflow:auto}.stop{border:1px solid #e2e8f0;border-radius:16px;padding:14px;margin-bottom:10px;background:white}.seq{display:inline-flex;width:30px;height:30px;border-radius:50%;align-items:center;justify-content:center;background:#111827;color:white;font-weight:800;margin-right:8px}.stop h3{margin:0 0 8px}.stop p{margin:5px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700}.pill.warn{background:#fef3c7;color:#92400e}.note{margin:6px 0;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;color:#92400e;font-size:13px}.login{max-width:420px;margin:10vh auto}.leaflet-div-icon{background:transparent!important;border:0!important}.marker-num{width:34px;height:34px;border-radius:50%;background:#111827;color:white;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,.35);font-weight:800}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}@media(max-width:800px){.wrap{padding:12px}.grid{grid-template-columns:1fr}.route-layout{grid-template-columns:1fr}.map{height:55vh;min-height:360px}.stops{max-height:none}.top{height:54px}.card{border-radius:14px;padding:14px}}
 """
 
 
@@ -196,7 +197,19 @@ def _home_page(user: str, error: str = "") -> str:
     runs_html = ""
     for run in _list_runs(user):
         km = run["summary"].get("total_distance_m", 0) / 1000
-        runs_html += f"""<div class="run"><div><b>{html.escape(run['meta'].get('date',''))}</b><div class="muted">{run['count']} точек · {km:.1f} км · старт {html.escape(run['meta'].get('depart',''))}</div></div><a class="btn secondary" href="/routes/{run['id']}">Открыть</a></div>"""
+        rid = html.escape(str(run["id"]))
+        d = html.escape(run["meta"].get("date", ""))
+        runs_html += (
+            f'<div class="run"><div><b>{d}</b>'
+            f'<div class="muted">{run["count"]} точек · {km:.1f} км · старт '
+            f'{html.escape(run["meta"].get("depart",""))}</div></div>'
+            f'<div style="display:flex;gap:8px;align-items:center">'
+            f'<a class="btn secondary" href="/routes/{rid}">Открыть</a>'
+            f'<form method="post" action="/routes/{rid}/delete" style="margin:0" '
+            f'onsubmit="return confirm(\'Удалить маршрут за {d}?\')">'
+            f'<button class="btn del" type="submit" title="Удалить">✕</button></form>'
+            f'</div></div>'
+        )
     if not runs_html:
         runs_html = '<p class="muted">Пока нет рассчитанных маршрутов.</p>'
     today = date.today().isoformat()
@@ -261,7 +274,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     )
 
     head = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-    body = f"""<section class="card"><h1>Маршрут на {html.escape(meta.get('date',''))}</h1><div class="grid"><div class="metric"><span class="muted">Точек</span><b>{len(route.get('visits',[]))}</b></div><div class="metric"><span class="muted">Пробег</span><b>{km:.1f} км</b></div><div class="metric"><span class="muted">Движение / ожидание</span><b>{travel} / {waiting} мин</b></div></div>{navi_html}<div class="toolbar"><a class="btn secondary" href="/">← К загрузке</a><a class="btn secondary" href="/routes/{run_id}/itinerary">Маршрут текстом</a></div></section><div class="route-layout"><div id="map" class="map card"></div><div class="stops">{stops_html}</div></div><script id="route-data" type="application/json">{data}</script>""" + """<script>
+    body = f"""<section class="card"><h1>Маршрут на {html.escape(meta.get('date',''))}</h1><div class="grid"><div class="metric"><span class="muted">Точек</span><b>{len(route.get('visits',[]))}</b></div><div class="metric"><span class="muted">Пробег</span><b>{km:.1f} км</b></div><div class="metric"><span class="muted">Движение / ожидание</span><b>{travel} / {waiting} мин</b></div></div>{navi_html}<div class="toolbar"><a class="btn secondary" href="/">← К загрузке</a><a class="btn secondary" href="/routes/{run_id}/itinerary">Маршрут текстом</a><form method="post" action="/routes/{run_id}/delete" style="margin:0" onsubmit="return confirm('Удалить этот маршрут? Отменить нельзя.')"><button class="btn del" type="submit">Удалить маршрут</button></form></div></section><div class="route-layout"><div id="map" class="map card"></div><div class="stops">{stops_html}</div></div><script id="route-data" type="application/json">{data}</script>""" + """<script>
 const route=JSON.parse(document.getElementById('route-data').textContent);
 const visits=route.visits||[]; const geometry=route.geometry||[];
 const map=L.map('map',{zoomControl:true});
@@ -365,6 +378,17 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         except (OSError, ValueError, TypeError):
             return HTMLResponse("Маршрут не найден", status_code=404)
         return HTMLResponse(_route_page(user, run_id, meta, route))
+
+    @app.post("/routes/{run_id}/delete")
+    async def delete_route(request: Request, run_id: str):
+        user = _require_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        if run_id.isalnum():
+            folder = _find_run_folder(user, run_id)   # уже проверяет владельца по meta.uploaded_by
+            if folder is not None:
+                shutil.rmtree(folder, ignore_errors=True)
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/routes/{run_id}/itinerary", response_class=HTMLResponse)
     async def itinerary(request: Request, run_id: str):
