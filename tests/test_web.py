@@ -56,3 +56,52 @@ def test_legacy_v1_route_is_visible_only_to_recorded_owner(monkeypatch, tmp_path
     assert web._list_runs("partner") == []
     assert web._find_run_folder("tolya", "legacy001") == legacy
     assert web._find_run_folder("partner", "legacy001") is None
+
+
+def _client_logged_in(monkeypatch, tmp_path, username="tolya"):
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(web, "RUNS_ROOT", tmp_path / "runs")
+    monkeypatch.setattr(web, "USERS_PATH", tmp_path / "users.json")
+    web._save_users({username: web._hash_password("pw12345678")})
+    monkeypatch.setenv("WEB_HTTPS_ONLY", "0")
+    client = TestClient(web.create_app("test-secret"))
+    r = client.post("/login", data={"username": username, "password": "pw12345678"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    return client
+
+
+def test_delete_own_route(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    folder = web._user_runs_root("tolya") / "abc123def456"
+    _write_run(folder, "tolya")
+    assert folder.exists()
+
+    r = client.post("/routes/abc123def456/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert not folder.exists()
+
+
+def test_cannot_delete_another_users_route(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path, "tolya")
+    victim = web._user_runs_root("partner") / "partn0000001"
+    _write_run(victim, "partner")
+
+    r = client.post("/routes/partn0000001/delete", follow_redirects=False)
+    assert r.status_code == 303
+    assert victim.exists()          # чужой маршрут не тронут
+
+
+def test_delete_unknown_route_is_noop(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    r = client.post("/routes/doesnotexist9/delete", follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_delete_requires_login(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(web, "RUNS_ROOT", tmp_path / "runs")
+    monkeypatch.setattr(web, "USERS_PATH", tmp_path / "users.json")
+    client = TestClient(web.create_app("test-secret"))
+    r = client.post("/routes/whatever0001/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
