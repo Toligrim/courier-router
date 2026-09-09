@@ -285,6 +285,27 @@ h3 {
   background: var(--surface);
   color: var(--ink);
   font-size: 16px;
+  /* iOS Safari: без этого нативные date/time-контролы игнорируют width и вылезают за карточку */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* iOS Safari рисует у date/time свои внутренние поля с собственной шириной — гасим их отступы */
+.field input[type="date"],
+.field input[type="time"] {
+  display: block;
+  box-sizing: border-box;
+}
+
+.field input::-webkit-date-and-time-value {
+  margin: 0;
+  min-width: 0;
+  text-align: left;
+}
+
+.field input::-webkit-datetime-edit,
+.field input::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
 }
 
 .field select {
@@ -1078,7 +1099,7 @@ h3 {
   }
 
   .form-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
 
