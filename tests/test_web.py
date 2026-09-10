@@ -221,14 +221,20 @@ def test_route_page_keeps_coordinate_review_separate_from_address_and_simplifies
     assert "1 точка, из них 1 на сверку" in page
 
 
-def test_route_page_exposes_manual_edit_controls():
+def test_route_page_exposes_per_stop_edit_controls():
     meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
     page = web._route_page("tolya", "abc123", meta, _sample_route())
-    assert 'data-edit="start"' in page
-    assert 'data-edit="save"' in page
-    assert 'class="edit-controls" hidden' in page
+    # номер точки — кнопка «переставить», отдельная кнопка ✎ на карточке
+    assert "data-pos-open" in page
+    assert "data-pos-input" in page
+    assert "data-edit-toggle" in page
+    assert 'data-edit="remove"' in page
     assert "data-coord-input" in page
     assert 'data-run-id="abc123"' in page
+    # никакого глобального режима правки со стрелками и панелью «Сохранить»
+    assert 'data-edit="start"' not in page
+    assert 'data-edit="up"' not in page
+    assert 'class="edit-bar"' not in page
 
 
 def test_route_page_shows_reset_only_when_manually_edited():

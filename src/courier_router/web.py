@@ -740,7 +740,7 @@ h3 {
   background: var(--surface);
 }
 
-/* ── ручное редактирование маршрута ─────────────────────────────── */
+/* ── ручное редактирование точки ───────────────────────────────── */
 .edited-note {
   margin: 10px 0 0;
   padding: 8px 12px;
@@ -751,10 +751,9 @@ h3 {
   font-size: 13px;
 }
 
-.edit-controls {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--line);
+.edit-hint {
+  margin: 8px 0 0;
+  font-size: 12.5px;
 }
 
 .edit-row {
@@ -764,20 +763,86 @@ h3 {
   align-items: center;
 }
 
-.btn.tiny,
-.icon-btn.tiny {
-  min-height: 36px;
-  padding: 6px 12px;
+.btn.tiny {
+  min-height: 38px;
+  padding: 7px 14px;
   font-size: 13px;
 }
 
-.icon-btn.danger {
+.btn.tiny.danger,
+.btn.secondary.tiny.danger {
   color: var(--danger);
   border-color: var(--danger);
 }
 
-.coord-editor {
+/* номер точки — теперь кнопка «переставить» */
+button.seq {
+  border: 0;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  position: relative;
+}
+
+button.seq::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface-elevated) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2368707d' stroke-width='3'%3E%3Cpath d='M8 7l-4 5 4 5M16 7l4 5-4 5'/%3E%3C/svg%3E") center/9px no-repeat;
+  box-shadow: 0 0 0 1.5px var(--surface-elevated);
+}
+
+.stop-edit-toggle {
+  margin-left: auto;
+  align-self: flex-start;
+}
+
+.stop-heading-row {
+  align-items: flex-start;
+}
+
+.pos-editor,
+.stop-edit {
   margin-top: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pos-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 640;
+  color: var(--ink);
+}
+
+.pos-editor input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.coord-editor {
+  margin-top: 4px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -796,7 +861,7 @@ h3 {
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--surface-elevated);
   color: var(--ink);
   font-size: 16px;
   -webkit-appearance: none;
@@ -809,66 +874,32 @@ h3 {
   min-height: 1em;
 }
 
-.stop.is-removed {
-  opacity: 0.5;
-}
-
-.stop.is-removed .stop-address {
-  text-decoration: line-through;
-}
-
-.stop.coord-edited .seq::after {
-  content: "✎";
-  margin-left: 2px;
-  font-size: 11px;
-}
-
-.route-page.is-editing .stop {
-  cursor: default;
-}
-
-.route-page.is-editing .stop .pill.neutral,
-.route-page.is-editing .stop .stop-leg {
-  opacity: 0.45;
-}
-
 .marker-dragging {
-  filter: drop-shadow(0 0 6px var(--accent));
+  filter: drop-shadow(0 0 7px var(--accent));
+  z-index: 1000 !important;
 }
 
-.edit-bar {
+.recompute-veil {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 60;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  background: var(--surface-elevated);
-  border-top: 1px solid var(--line);
-  box-shadow: var(--shadow-float);
-}
-
-.edit-bar-inner {
+  inset: 0;
+  z-index: 90;
   display: flex;
-  gap: 12px;
   align-items: center;
-  justify-content: space-between;
-  max-width: 720px;
-  margin: 0 auto;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
 }
 
-.edit-bar-status {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.edit-bar-actions {
+.recompute-card {
   display: flex;
-  gap: 8px;
-}
-
-.route-page.is-editing {
-  padding-bottom: 96px;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  border-radius: 16px;
+  background: var(--surface-elevated);
+  color: var(--ink);
+  font-weight: 640;
+  box-shadow: var(--shadow-float);
 }
 
 .login {
@@ -1550,160 +1581,138 @@ EDIT_JS = """<script>
 (() => {
   const root = document.querySelector('.route-page');
   const list = document.querySelector('.stops');
-  const bar = document.querySelector('.edit-bar');
-  if (!root || !list || !bar) return;
+  if (!root || !list) return;
   const runId = root.dataset.runId;
-  const statusEl = bar.querySelector('[data-edit-status]');
-  const saveBtn = bar.querySelector('[data-edit="save"]');
+  const veil = root.querySelector('.recompute-veil');
+  let busy = false;
   let dragCleanup = null;
 
   const cards = () => Array.from(list.querySelectorAll('.stop'));
-  const activeCards = () => cards().filter((c) => !c.classList.contains('is-removed'));
-
-  const renumber = () => {
-    activeCards().forEach((card, i) => {
-      const seq = card.querySelector('.seq');
-      if (seq) seq.textContent = String(i + 1);
-    });
-  };
+  const currentOrder = () => cards().map((c) => Number(c.dataset.row));
+  const stopDrag = () => { if (dragCleanup) { dragCleanup(); dragCleanup = null; } };
 
   const parseLatLon = (text) => {
     const nums = String(text || '').replace(',', ' ').match(/-?\\d+(?:\\.\\d+)?/g);
     if (!nums || nums.length < 2) return null;
     let a = parseFloat(nums[0]);
     let b = parseFloat(nums[1]);
-    // Яндекс печатает «широта, долгота»; на всякий случай ловим перепутанный порядок
     if (a >= 25 && a <= 40 && b >= 55 && b <= 63) { const t = a; a = b; b = t; }
     if (!(a >= 55 && a <= 63 && b >= 25 && b <= 40)) return null;
     return [Number(a.toFixed(6)), Number(b.toFixed(6))];
   };
 
-  const dirtyCount = () => {
-    let moved = 0;
-    activeCards().forEach((card, i) => { if (Number(card.dataset.origIndex) !== i) moved += 1; });
-    const removed = cards().filter((c) => c.classList.contains('is-removed')).length;
-    const coords = cards().filter((c) => c.dataset.newLat).length;
-    return {moved, removed, coords, total: (moved ? 1 : 0) + removed + coords};
-  };
-
-  const refreshStatus = () => {
-    const d = dirtyCount();
-    const parts = [];
-    if (d.moved) parts.push('порядок изменён');
-    if (d.removed) parts.push(d.removed + ' убрано');
-    if (d.coords) parts.push(d.coords + ' координ. правок');
-    statusEl.textContent = parts.length ? parts.join(' · ') : 'Изменений нет';
-    saveBtn.disabled = d.total === 0;
-  };
-
-  const startEdit = () => {
-    cards().forEach((card, i) => { card.dataset.origIndex = String(i); });
-    root.classList.add('is-editing');
-    list.querySelectorAll('.edit-controls').forEach((el) => { el.hidden = false; });
-    bar.hidden = false;
-    const menu = root.querySelector('.more-menu');
-    if (menu) menu.open = false;
-    if (window.__routeMap) window.__routeMap.setRouteView('list', {fit: false});
-    refreshStatus();
-  };
-
-  const stopDrag = () => { if (dragCleanup) { dragCleanup(); dragCleanup = null; } };
-
-  const applyCoord = (card, pair, hintEl) => {
-    card.dataset.newLat = String(pair[0]);
-    card.dataset.newLon = String(pair[1]);
-    card.classList.add('coord-edited');
-    if (hintEl) hintEl.textContent = 'Новая координата: ' + pair[0] + ', ' + pair[1];
-    const rm = window.__routeMap;
-    if (rm) {
-      const mk = rm.markers.get(card.dataset.sequence);
-      if (mk) mk.setLatLng(pair);
-    }
-    refreshStatus();
-  };
-
-  list.addEventListener('click', (event) => {
-    const btn = event.target.closest('[data-edit]');
-    if (!btn || !root.classList.contains('is-editing')) return;
-    const card = btn.closest('.stop');
-    const action = btn.dataset.edit;
-    if (action === 'up') {
-      const prev = card.previousElementSibling;
-      if (prev) list.insertBefore(card, prev);
-      renumber(); refreshStatus();
-    } else if (action === 'down') {
-      const next = card.nextElementSibling;
-      if (next) list.insertBefore(next, card);
-      renumber(); refreshStatus();
-    } else if (action === 'remove') {
-      card.classList.toggle('is-removed');
-      btn.textContent = card.classList.contains('is-removed') ? '↺' : '✕';
-      renumber(); refreshStatus();
-    } else if (action === 'coord') {
-      const ed = card.querySelector('.coord-editor');
-      if (ed) ed.hidden = !ed.hidden;
-    } else if (action === 'coord-apply') {
-      const input = card.querySelector('[data-coord-input]');
-      const hint = card.querySelector('[data-coord-hint]');
-      const pair = parseLatLon(input.value);
-      if (!pair) { if (hint) hint.textContent = 'Не понял координату. Формат: 59.775504, 30.077392'; return; }
-      applyCoord(card, pair, hint);
-    } else if (action === 'coord-drag') {
-      const rm = window.__routeMap;
-      const hint = card.querySelector('[data-coord-hint]');
-      if (!rm) return;
-      const mk = rm.markers.get(card.dataset.sequence);
-      if (!mk) return;
-      stopDrag();
-      rm.setRouteView('map', {fit: false});
-      setTimeout(() => {
-        rm.map.invalidateSize(false);
-        rm.map.setView(mk.getLatLng(), 17, {animate: !rm.reducedMotion});
-        if (mk.dragging) mk.dragging.enable();
-        mk._icon && mk._icon.classList.add('marker-dragging');
-        if (hint) hint.textContent = 'Тащите булавку на карте, затем вернитесь к списку.';
-        const onEnd = () => {
-          const ll = mk.getLatLng();
-          const pair = [Number(ll.lat.toFixed(6)), Number(ll.lng.toFixed(6))];
-          const input = card.querySelector('[data-coord-input]');
-          if (input) input.value = pair[0] + ', ' + pair[1];
-          applyCoord(card, pair, hint);
-        };
-        mk.on('dragend', onEnd);
-        dragCleanup = () => {
-          mk.off('dragend', onEnd);
-          if (mk.dragging) mk.dragging.disable();
-          mk._icon && mk._icon.classList.remove('marker-dragging');
-        };
-      }, 60);
-    }
-  });
-
-  bar.addEventListener('click', (event) => {
-    const btn = event.target.closest('[data-edit]');
-    if (!btn) return;
-    if (btn.dataset.edit === 'cancel') { location.reload(); return; }
-    if (btn.dataset.edit !== 'save') return;
+  const applyEdit = (payload) => {
+    if (busy) return;
+    busy = true;
     stopDrag();
-    const removed = cards().filter((c) => c.classList.contains('is-removed'))
-      .map((c) => Number(c.dataset.row));
-    const order = activeCards().map((c) => Number(c.dataset.row));
-    const coords = {};
-    cards().forEach((c) => { if (c.dataset.newLat) coords[c.dataset.row] = [Number(c.dataset.newLat), Number(c.dataset.newLon)]; });
-    if (!order.length) { statusEl.textContent = 'Нельзя убрать все точки'; return; }
-    saveBtn.disabled = true;
-    statusEl.textContent = 'Пересчёт маршрута…';
+    if (veil) veil.hidden = false;
     fetch('/routes/' + encodeURIComponent(runId) + '/edit', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({order, deleted: removed, coords}),
-    }).then((r) => r.ok ? r.json() : r.text().then((t) => Promise.reject(t)))
+      body: JSON.stringify(payload),
+    }).then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(t))))
       .then(() => location.reload())
-      .catch((err) => { statusEl.textContent = String(err).slice(0, 160) || 'Ошибка'; saveBtn.disabled = false; });
+      .catch((err) => {
+        busy = false;
+        if (veil) veil.hidden = true;
+        alert('Не получилось изменить маршрут:\\n' + String(err).slice(0, 200));
+      });
+  };
+
+  const closePanels = (except) => {
+    list.querySelectorAll('.pos-editor:not([hidden]), .stop-edit:not([hidden])').forEach((el) => {
+      if (!except || !except.contains(el)) el.hidden = true;
+    });
+  };
+
+  const moveToPosition = (card, pos) => {
+    const order = currentOrder();
+    const row = Number(card.dataset.row);
+    const from = order.indexOf(row);
+    const target = Math.min(Math.max(pos, 1), order.length) - 1;
+    if (from === target) { card.querySelector('.pos-editor').hidden = true; return; }
+    order.splice(from, 1);
+    order.splice(target, 0, row);
+    applyEdit({order: order, deleted: [], coords: {}});
+  };
+
+  const startMapDrag = (card) => {
+    const rm = window.__routeMap;
+    const hint = card.querySelector('[data-coord-hint]');
+    if (!rm) return;
+    const mk = rm.markers.get(card.dataset.sequence);
+    if (!mk) return;
+    stopDrag();
+    rm.setRouteView('map', {fit: false});
+    setTimeout(() => {
+      rm.map.invalidateSize(false);
+      rm.map.setView(mk.getLatLng(), 17, {animate: !rm.reducedMotion});
+      if (mk.dragging) mk.dragging.enable();
+      if (mk._icon) mk._icon.classList.add('marker-dragging');
+      if (hint) hint.textContent = 'Тащите булавку на нужное место, потом «Сохранить координату».';
+      const onEnd = () => {
+        const ll = mk.getLatLng();
+        const pair = [Number(ll.lat.toFixed(6)), Number(ll.lng.toFixed(6))];
+        const input = card.querySelector('[data-coord-input]');
+        if (input) input.value = pair[0] + ', ' + pair[1];
+        if (hint) hint.textContent = 'Готово? Нажмите «Сохранить координату».';
+      };
+      mk.on('dragend', onEnd);
+      dragCleanup = () => {
+        mk.off('dragend', onEnd);
+        if (mk.dragging) mk.dragging.disable();
+        if (mk._icon) mk._icon.classList.remove('marker-dragging');
+      };
+    }, 60);
+  };
+
+  list.addEventListener('click', (event) => {
+    const btn = event.target.closest('button');
+    if (!btn) return;
+    const card = btn.closest('.stop');
+    if (!card) return;
+
+    if (btn.hasAttribute('data-pos-open')) {
+      const ed = card.querySelector('.pos-editor');
+      const willOpen = ed.hidden;
+      closePanels(willOpen ? card : null);
+      ed.hidden = !willOpen;
+      if (willOpen) { const inp = ed.querySelector('[data-pos-input]'); inp.focus(); inp.select(); }
+    } else if (btn.hasAttribute('data-pos-cancel')) {
+      card.querySelector('.pos-editor').hidden = true;
+    } else if (btn.hasAttribute('data-pos-apply')) {
+      const raw = parseInt(card.querySelector('[data-pos-input]').value, 10);
+      if (Number.isFinite(raw)) moveToPosition(card, raw);
+    } else if (btn.hasAttribute('data-edit-toggle')) {
+      const box = card.querySelector('.stop-edit');
+      const willOpen = box.hidden;
+      closePanels(willOpen ? card : null);
+      box.hidden = !willOpen;
+    } else if (btn.dataset.edit === 'coord') {
+      const ce = card.querySelector('.coord-editor');
+      ce.hidden = !ce.hidden;
+    } else if (btn.dataset.edit === 'coord-drag') {
+      startMapDrag(card);
+    } else if (btn.dataset.edit === 'coord-apply') {
+      const hint = card.querySelector('[data-coord-hint]');
+      const pair = parseLatLon(card.querySelector('[data-coord-input]').value);
+      if (!pair) { if (hint) hint.textContent = 'Формат: 59.775504, 30.077392'; return; }
+      applyEdit({order: currentOrder(), deleted: [], coords: {[card.dataset.row]: pair}});
+    } else if (btn.dataset.edit === 'remove') {
+      if (cards().length <= 1) { alert('Это последняя точка — убрать нельзя.'); return; }
+      if (!confirm('Убрать эту точку из маршрута?')) return;
+      const row = Number(card.dataset.row);
+      applyEdit({order: currentOrder().filter((r) => r !== row), deleted: [row], coords: {}});
+    }
   });
 
-  document.querySelectorAll('[data-edit="start"]').forEach((btn) => {
-    btn.addEventListener('click', startEdit);
+  list.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    const inp = event.target.closest('[data-pos-input]');
+    if (!inp) return;
+    event.preventDefault();
+    const raw = parseInt(inp.value, 10);
+    if (Number.isFinite(raw)) moveToPosition(inp.closest('.stop'), raw);
   });
 })();
 </script>"""
@@ -2047,6 +2056,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     travel = round(summary.get("total_travel_sec", 0) / 60)
     review_count = sum(1 for visit in visits if visit.get("stop", {}).get("coord_status") == "review")
     stops_html = ""
+    total_stops = len(visits)
 
     for visit in visits:
         stop = visit["stop"]
@@ -2082,15 +2092,29 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         late_by = int(visit.get("late_by_min", 0) or 0)
         late_html = f'<span class="pill review">опоздание {late_by} мин</span>' if late_by > 0 else ""
         src_row = int(stop.get("source_row") or 0)
-        lat_v, lon_v = stop.get("lat"), stop.get("lon")
+        try:
+            lat_v = round(float(stop.get("lat")), 6)
+            lon_v = round(float(stop.get("lon")), 6)
+        except (TypeError, ValueError):
+            lat_v, lon_v = stop.get("lat"), stop.get("lon")
         ya_point = html.escape(
             f"https://yandex.ru/maps/?whatshere%5Bpoint%5D={lon_v}%2C{lat_v}&whatshere%5Bzoom%5D=18&l=map",
             quote=True,
         )
         stops_html += f"""<article class="stop" id="stop-{visit['sequence']}" data-sequence="{visit['sequence']}" data-row="{src_row}" data-lat="{lat_v}" data-lon="{lon_v}" tabindex="0" role="button" aria-label="Показать точку {visit['sequence']} на карте">
   <div class="stop-heading-row">
-    <span class="seq {operation_class}">{visit['sequence']}</span>
+    <button type="button" class="seq {operation_class}" data-pos-open aria-label="Сейчас точка №{visit['sequence']}. Нажмите, чтобы поставить на другое место">{visit['sequence']}</button>
     <h3 class="stop-address">{html.escape(address)}</h3>
+    <button type="button" class="stop-edit-toggle icon-btn" data-edit-toggle aria-label="Изменить точку">✎</button>
+  </div>
+  <div class="pos-editor" hidden>
+    <label>Поставить точку на место №
+      <input type="number" inputmode="numeric" min="1" max="{total_stops}" value="{visit['sequence']}" data-pos-input>
+    </label>
+    <div class="edit-row">
+      <button type="button" class="btn secondary tiny" data-pos-cancel>Отмена</button>
+      <button type="button" class="btn tiny" data-pos-apply>Переместить</button>
+    </div>
   </div>
   {raw_html}
   <div class="pill-row">
@@ -2107,12 +2131,10 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
   </div>
   {comment_html}
   <div class="stop-actions"><a class="btn secondary" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a></div>
-  <div class="edit-controls" hidden>
+  <div class="stop-edit" hidden>
     <div class="edit-row">
-      <button type="button" class="icon-btn" data-edit="up" aria-label="Выше">↑</button>
-      <button type="button" class="icon-btn" data-edit="down" aria-label="Ниже">↓</button>
-      <button type="button" class="icon-btn danger" data-edit="remove" aria-label="Убрать точку">✕</button>
-      <button type="button" class="btn secondary tiny" data-edit="coord">Координата</button>
+      <button type="button" class="btn secondary tiny" data-edit="coord">📍 Изменить координату</button>
+      <button type="button" class="btn secondary tiny danger" data-edit="remove">✕ Убрать из маршрута</button>
     </div>
     <div class="coord-editor" hidden>
       <label>Координата с Яндекс.Карт (широта, долгота)
@@ -2121,7 +2143,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
       <div class="edit-row">
         <button type="button" class="btn secondary tiny" data-edit="coord-drag">Перетащить на карте</button>
         <a class="btn secondary tiny" href="{ya_point}" target="_blank" rel="noopener">Открыть в Яндексе</a>
-        <button type="button" class="btn tiny" data-edit="coord-apply">Применить</button>
+        <button type="button" class="btn tiny" data-edit="coord-apply">Сохранить координату</button>
       </div>
       <p class="coord-editor-hint muted" data-coord-hint></p>
     </div>
@@ -2187,7 +2209,6 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     <details class="more-menu">
       <summary class="icon-btn" aria-label="Действия с маршрутом">···</summary>
       <div class="menu-popover">
-        <button type="button" class="menu-item" data-edit="start">✎ Редактировать маршрут</button>
         {reset_menu}
         <form method="post" action="/routes/{run_id}/delete" onsubmit="return confirm('Удалить этот маршрут? Отменить нельзя.')">
           <button class="menu-danger" type="submit">Удалить маршрут</button>
@@ -2196,6 +2217,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     </details>
   </div>
   {edited_badge}
+  <p class="edit-hint muted">Точку можно поправить: нажмите её номер, чтобы переставить, или ✎ — чтобы сдвинуть на карте или убрать.</p>
   <div class="metric-grid">
     <div class="metric"><span class="metric-label">Пробег</span><strong class="metric-value">{km:.1f} км</strong></div>
     <div class="metric"><span class="metric-label">Время в пути</span><strong class="metric-value">{travel} мин</strong></div>
@@ -2214,15 +2236,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
 </div>
 <script id="route-data" type="application/json">{data}</script>
 {bottom_action}
-<div class="edit-bar" hidden>
-  <div class="edit-bar-inner">
-    <span class="edit-bar-status" data-edit-status>Режим правки</span>
-    <div class="edit-bar-actions">
-      <button type="button" class="btn secondary" data-edit="cancel">Отмена</button>
-      <button type="button" class="btn" data-edit="save">Сохранить</button>
-    </div>
-  </div>
-</div>
+<div class="recompute-veil" hidden><div class="recompute-card"><span class="spinner"></span>Пересчитываю маршрут…</div></div>
 </div>""" + ROUTE_JS + EDIT_JS
     return _shell(f"Маршрут {meta.get('date', '')}", body, user, head)
 
