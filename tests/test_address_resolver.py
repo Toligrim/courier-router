@@ -1,9 +1,34 @@
 from courier_router.geocode import (
     DaDataGeocoder,
     RESOLVER_VERSION,
+    _extract_house,
     normalize_address_input,
     score_dadata_candidate,
 )
+
+
+def test_house_letter_split_by_space_or_glued_apartment():
+    # курьер отделил литеру дома пробелом: "д.27 в 93" == дом 27в, кв 93
+    assert _extract_house("Индустриальный пр-кт д.27 в 93") == "27в"
+    # квартира приклеена к дому без пробела: "д 23кв 33" == дом 23, кв 33
+    assert _extract_house("г Санкт-Петербург, ул Новосёлов, д 23кв 33") == "23"
+    # корпус не должен утекать в номер дома
+    assert _extract_house("ул Мира, д 5 к 2") == "5"
+
+
+def test_bare_house_number_matches_dadata_letter_variant():
+    source = normalize_address_input("Индустриальный пр-кт д.27 в 93", "Красногвардейский")
+    data = {
+        "region": "г Санкт-Петербург",
+        "city": "Санкт-Петербург",
+        "street": "Индустриальный",
+        "house": "27в",
+        "geo_lat": "59.95",
+        "geo_lon": "30.47",
+    }
+    score, reasons, strong_mismatch = score_dadata_candidate(source, data)
+    assert not strong_mismatch
+    assert "house_mismatch" not in reasons
 
 
 def test_normalizes_spb_abbreviation_and_known_typo():

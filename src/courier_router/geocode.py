@@ -55,9 +55,21 @@ def normalize_address_input(address: str, district: str = "") -> str:
 
 
 def _extract_house(source: str) -> str | None:
-    explicit = re.search(r"(?:^|[ ,])(?:д|дом)\.?\s*([0-9]+[а-яa-z]?(?:/[0-9]+)?)\b", source, re.I)
+    # digits (+ optional /fraction) + optional single letter — но литеру берём только
+    # если за ней не идёт ещё буква, иначе "д 23кв 33" съедало бы "к" из "кв".
+    explicit = re.search(
+        r"(?:^|[ ,])(?:д|дом)\.?\s*([0-9]+(?:/[0-9]+)?)(?:([а-яa-z])(?![а-яa-z]))?",
+        source, re.I,
+    )
     if explicit:
-        return _norm_text(explicit.group(1))
+        house = _norm_text(explicit.group(1) + (explicit.group(2) or ""))
+        # "д.27 в 93" — курьер отделил литеру дома пробелом. Приклеиваем её обратно,
+        # но только настоящую литеру: не к/с (корпус/строение) и не номер квартиры.
+        if house.isdigit():
+            tail = re.match(r"\s*([а-яa-z])(?=[ ,]|$)", source[explicit.end():], re.I)
+            if tail and tail.group(1).lower() not in {"к", "с"}:
+                house += tail.group(1).lower()
+        return house
 
     # Courier spreadsheets often contain a compact form like "Савушкина 15".
     # Strip apartment/office/structure values first, then accept a single remaining
@@ -70,6 +82,19 @@ def _extract_house(source: str) -> str | None:
     numbers = re.findall(r"(?<![-\w])([0-9]+[а-яa-z]?(?:/[0-9]+)?)(?![-\w])", cleaned, re.I)
     normalized = [_norm_text(x) for x in numbers]
     return normalized[0] if len(normalized) == 1 else None
+
+
+def _same_house_number(a: str | None, b: str | None) -> bool:
+    """'27' vs '27в', '12' vs '12/3' — один номер дома, разная литера/дробь.
+    '27а' vs '27в' — разные дома (обе формы с литерой) → False."""
+    a, b = (a or "").strip(), (b or "").strip()
+    da = re.match(r"([0-9]+)", a)
+    db = re.match(r"([0-9]+)", b)
+    if not da or not db or da.group(1) != db.group(1):
+        return False
+    digits = da.group(1)
+    short, long = sorted((a, b), key=len)
+    return short == digits and long.startswith(digits) and long != short
 
 
 def _extract_block(source: str) -> str | None:
@@ -214,6 +239,11 @@ def score_dadata_candidate(source: str, data: dict) -> tuple[float, list[str], b
         if candidate_house == source_house:
             score += 0.30
             reasons.append("house_match")
+        elif candidate_house and _same_house_number(source_house, candidate_house):
+            # тот же номер дома, разница только в литере/дроби ("27" ↔ "27в",
+            # "12" ↔ "12/3") — это одна точка, не эскалируем до strong_mismatch
+            score += 0.10
+            reasons.append("house_letter_diff")
         elif candidate_house:
             score -= 0.45
             reasons.append("house_mismatch")
