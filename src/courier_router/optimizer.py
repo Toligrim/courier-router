@@ -161,6 +161,75 @@ def _solve_once(
     )
 
 
+def sequence_route(
+    ordered_stops: list[Stop],
+    leg_durations_sec: list[float],
+    leg_distances_m: list[float],
+    depart_min: int,
+    end_mode: str = "depot",
+    return_leg: tuple[float, float] | None = None,
+) -> RouteSolution:
+    """Маршрут по ЗАФИКСИРОВАННОМУ порядку точек — без оптимизации (ручная правка).
+
+    leg_*[k] — плечо от точки k к точке k+1, где точка 0 — база, точка k — это
+    ordered_stops[k-1]. return_leg — плечо обратно на базу при end_mode='depot'.
+    Опоздание за окно не запрещает точку, а копится в total_late_min (best-effort).
+    """
+    visits: list[RouteVisit] = []
+    now = depart_min * 60
+    total_distance = total_travel = total_service = total_wait = total_late = 0
+    used_soft = False
+    for k, stop in enumerate(ordered_stops):
+        travel = int(round(leg_durations_sec[k]))
+        dist = int(round(leg_distances_m[k]))
+        arrival = now + travel
+        wait = 0
+        if stop.window and arrival < stop.window.start_min * 60:
+            wait = stop.window.start_min * 60 - arrival
+            arrival += wait
+        late = 0
+        if stop.window and arrival > stop.window.end_min * 60:
+            late = (arrival - stop.window.end_min * 60 + 59) // 60
+            used_soft = True
+        svc = int(stop.service_min) * 60
+        visits.append(RouteVisit(
+            stop_index=k,
+            arrival_min=arrival // 60,
+            departure_min=(arrival + svc) // 60,
+            travel_sec_from_prev=travel,
+            distance_m_from_prev=dist,
+            late_by_min=int(late),
+        ))
+        total_distance += dist
+        total_travel += travel
+        total_service += svc
+        total_wait += wait
+        total_late += int(late)
+        now = arrival + svc
+    if end_mode == "depot" and return_leg:
+        total_travel += int(round(return_leg[0]))
+        total_distance += int(round(return_leg[1]))
+    warnings: list[str] = []
+    if used_soft:
+        warnings.append("Порядок точек задан вручную — часть окон доставки не соблюдается")
+        for v in visits:
+            if v.late_by_min > 0:
+                warnings.append(
+                    f"Заказ №{ordered_stops[v.stop_index].order_no}: ожидаемое опоздание {v.late_by_min} мин"
+                )
+    return RouteSolution(
+        visits=visits,
+        total_distance_m=total_distance,
+        total_travel_sec=total_travel,
+        total_service_sec=total_service,
+        total_wait_sec=total_wait,
+        feasible=True,
+        warnings=warnings,
+        used_soft_windows=used_soft,
+        total_late_min=total_late,
+    )
+
+
 def _soft_fallback_warnings(strict: RouteSolution, soft: RouteSolution, stops: list[Stop]) -> list[str]:
     if strict.solver_status == ROUTING_INFEASIBLE:
         warnings = [

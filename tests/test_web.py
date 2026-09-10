@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from courier_router import web
 
 
@@ -217,6 +219,77 @@ def test_route_page_keeps_coordinate_review_separate_from_address_and_simplifies
     assert 'class="metric-label">Время в пути</span>' in page
     assert "Движение / ожидание" not in page
     assert "1 точка, из них 1 на сверку" in page
+
+
+def test_route_page_exposes_manual_edit_controls():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    page = web._route_page("tolya", "abc123", meta, _sample_route())
+    assert 'data-edit="start"' in page
+    assert 'data-edit="save"' in page
+    assert 'class="edit-controls" hidden' in page
+    assert "data-coord-input" in page
+    assert 'data-run-id="abc123"' in page
+
+
+def test_route_page_shows_reset_only_when_manually_edited():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    plain = web._route_page("tolya", "abc123", meta, _sample_route())
+    assert "Сбросить ручные правки" not in plain
+    edited = _sample_route()
+    edited["manually_edited"] = True
+    page = web._route_page("tolya", "abc123", meta, edited)
+    assert "Сбросить ручные правки" in page
+    assert "отредактирован вручную" in page
+
+
+def test_edit_route_recomputes_for_owner(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    folder = web._user_runs_root("tolya") / "editablerun1"
+    _write_run(folder, "tolya")
+    calls = {}
+
+    def fake_recompute(c, fold, order, deleted, coords, store=None):
+        calls["args"] = (fold, order, deleted, coords)
+        (fold / "route.json").write_text('{"manually_edited": true, "visits": []}', encoding="utf-8")
+
+    monkeypatch.setattr(web, "recompute_route", fake_recompute)
+    r = client.post("/routes/editablerun1/edit",
+                    json={"order": [3, 1], "deleted": [2], "coords": {"1": [59.9, 30.4]}})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert calls["args"][1] == [3, 1]
+    assert calls["args"][2] == {2}
+    assert calls["args"][3] == {1: (59.9, 30.4)}
+
+
+def test_edit_route_rejects_out_of_region_coord(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    folder = web._user_runs_root("tolya") / "editablerun2"
+    _write_run(folder, "tolya")
+    monkeypatch.setattr(web, "recompute_route", lambda *a, **k: pytest.fail("must not recompute"))
+    r = client.post("/routes/editablerun2/edit",
+                    json={"order": [1], "deleted": [], "coords": {"1": [12.3, 45.6]}})
+    assert r.status_code == 400
+
+
+def test_edit_route_blocks_other_users(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path, "tolya")
+    victim = web._user_runs_root("partner") / "partnrun0001"
+    _write_run(victim, "partner")
+    monkeypatch.setattr(web, "recompute_route", lambda *a, **k: pytest.fail("must not recompute"))
+    r = client.post("/routes/partnrun0001/edit", json={"order": [1], "deleted": [], "coords": {}})
+    assert r.status_code == 404
+
+
+def test_reset_route_restores_backup(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    folder = web._user_runs_root("tolya") / "resetrun0001"
+    _write_run(folder, "tolya")
+    (folder / "route.original.json").write_text('{"feasible": true, "visits": [1,2,3]}', encoding="utf-8")
+    (folder / "itinerary.original.txt").write_text("orig", encoding="utf-8")
+    r = client.post("/routes/resetrun0001/reset", follow_redirects=False)
+    assert r.status_code == 303
+    assert json.loads((folder / "route.json").read_text())["visits"] == [1, 2, 3]
+    assert not (folder / "route.original.json").exists()
 
 
 def test_route_page_handles_infeasible_route_without_map():
