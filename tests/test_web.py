@@ -199,6 +199,8 @@ def test_route_page_has_mobile_list_map_switch_sticky_navigation_and_menu_delete
     assert "map.invalidateSize" in page
     assert "map.setView(marker.getLatLng(), 16" in page
     assert "scrollIntoView" in page
+    assert "🕒 Доставка " in page  # окно доставки прямо в попапе маркера
+    assert "data-open-list=" in page
     assert 'class="bottom-action"' in page
     assert "🧭 Открыть в Навигаторе" in page
     assert '<summary class="icon-btn" aria-label="Действия с маршрутом">···</summary>' in page

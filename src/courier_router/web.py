@@ -1246,6 +1246,37 @@ button.seq::after {
   box-shadow: var(--shadow-float);
 }
 
+.leaflet-popup-content {
+  margin: 12px 16px;
+}
+
+.map-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.map-popup b {
+  font-size: 14px;
+}
+
+.map-popup-window {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.map-popup-eta {
+  color: var(--muted);
+}
+
+.map-popup a {
+  margin-top: 2px;
+  font-weight: 600;
+}
+
 .bottom-action {
   position: fixed;
   right: 0;
@@ -1524,16 +1555,26 @@ ROUTE_JS = """<script>
     });
     const marker = L.marker([stop.lat, stop.lon], {icon}).addTo(map);
     const address = stop.address_display || stop.address_normalized || stop.address_raw || '';
+    const windowText = stop.window ? String(stop.window).replace(/ *[-–—] */, ' – ') : 'не задано';
     marker.bindPopup(
-      `<b>${escapeHtml(visit.sequence)}. ${escapeHtml(address)}</b><br>` +
-      `ETA ${formatMinute(visit.arrival_min)}<br>` +
-      `Заказ №${escapeHtml(stop.order_no)}`
+      `<div class="map-popup">` +
+      `<b>${escapeHtml(visit.sequence)}. ${escapeHtml(address)}</b>` +
+      `<span class="map-popup-window">🕒 Доставка ${escapeHtml(windowText)}</span>` +
+      `<span class="map-popup-eta">Прибытие ≈ ${formatMinute(visit.arrival_min)} · заказ №${escapeHtml(stop.order_no)}</span>` +
+      `<a href="#stop-${escapeHtml(visit.sequence)}" data-open-list="${escapeHtml(visit.sequence)}">Показать в списке →</a>` +
+      `</div>`,
+      {autoPanPadding: [24, 24]}
     );
-    marker.on('click', () => {
-      setRouteView('list', {fit: false});
-      requestAnimationFrame(() => {
-        const card = document.getElementById(`stop-${visit.sequence}`);
-        card?.scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'center'});
+    marker.on('popupopen', (event) => {
+      const link = event.popup.getElement().querySelector('[data-open-list]');
+      link?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        marker.closePopup();
+        setRouteView('list', {fit: false});
+        requestAnimationFrame(() => {
+          document.getElementById(`stop-${visit.sequence}`)
+            ?.scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'center'});
+        });
       });
     });
     markers.set(String(visit.sequence), marker);
