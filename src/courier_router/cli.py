@@ -2,11 +2,11 @@ from __future__ import annotations
 import argparse, json, os, platform, sys
 from pathlib import Path
 from .config import Config
-from .domain import GeoPoint
+from .domain import GeoPoint, Operation, Payment, Stop, TimeWindow
 from .geocode import DaDataGeocoder, PublicNominatimGeocoder, RESOLVER_VERSION
 from .llm import clean_with_openai, clean_with_anthropic
-from .optimizer import solve_single_vehicle
-from .parsing import read_table
+from .optimizer import sequence_route, solve_single_vehicle
+from .parsing import parse_window, read_table
 from .render import render_map
 from .report import itinerary_text, route_json
 from .routing import ORSRouter, OSRMRouter
@@ -405,6 +405,112 @@ def cmd_plan(args):
     print(text)
     print(f"\nГотово: {out.resolve()}")
     return 0
+
+
+# --- ручное редактирование готового маршрута (веб-интерфейс) ---------------------
+
+def _stop_from_json(d: dict, default_service_min: int) -> Stop:
+    """Восстановить Stop из объекта visit.stop в route.json (без повторного геокодирования)."""
+    win = None
+    if d.get("window"):
+        try:
+            win = parse_window(d["window"])
+        except Exception:
+            win = None
+    s = Stop(
+        source_row=int(d.get("source_row") or 0),
+        operation=Operation(d.get("operation") or "delivery"),
+        order_no=int(d.get("order_no") or 0),
+        phone=d.get("phone") or "",
+        district=d.get("district") or "",
+        address_raw=d.get("address_raw") or "",
+        access=d.get("access") or "",
+        window=win,
+        payment=Payment(raw=d.get("payment") or ""),
+        comment=d.get("comment") or "",
+        service_min=int(d.get("service_min") or default_service_min),
+    )
+    s.coord_status = d.get("coord_status") or "ok"
+    s.coord_note = d.get("coord_note") or ""
+    s.geo = GeoPoint(
+        lat=float(d["lat"]), lon=float(d["lon"]),
+        provider=d.get("geocoder") or "cache",
+        normalized_address=d.get("address_normalized") or d.get("address_raw") or "",
+        precision=d.get("geocode_precision") or "unknown",
+        confidence=float(d.get("geocode_confidence") or 0.0),
+    )
+    return s
+
+
+def recompute_route(c: Config, folder: Path, order_rows: list[int],
+                    deleted_rows: set[int], coord_overrides: dict[int, tuple[float, float]],
+                    store: Storage | None = None) -> dict:
+    """Пересобрать маршрут в заданном вручную порядке: без OR-Tools, только пересчёт
+    плеч/геометрии/ETA. Исправленные координаты закрепляются за адресом (alias)."""
+    meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    route = json.loads((folder / "route.json").read_text(encoding="utf-8"))
+    by_row = {v["stop"]["source_row"]: v["stop"] for v in route.get("visits", [])}
+
+    kept = [r for r in order_rows if r in by_row and r not in deleted_rows]
+    if not kept:
+        raise RuntimeError("В маршруте не осталось ни одной точки")
+
+    ordered = [_stop_from_json(by_row[r], c.default_service_min) for r in kept]
+    for s in ordered:
+        if s.source_row in coord_overrides:
+            lat, lon = coord_overrides[s.source_row]
+            s.geo.lat, s.geo.lon = lat, lon
+            s.geo.provider, s.geo.precision, s.geo.confidence = "manual", "verified", 1.0
+            _clear_coord_flag(s)
+            if store is not None:
+                store.put_alias(s.address_raw, s.district, lat, lon,
+                                normalized_address=s.geo.normalized_address,
+                                note="Исправлено вручную на карте")
+
+    end_mode = meta.get("end", "depot")
+    depart_min = minutes(meta.get("depart", "10:00"))
+    d = depot(c, get_geocoder(c))
+    pts = [(d.lat, d.lon)] + [(s.geo.lat, s.geo.lon) for s in ordered]
+    if end_mode == "depot":
+        pts.append((d.lat, d.lon))
+
+    router = get_router(c)
+    durations, distances = router.matrix(pts)
+    n = len(ordered)
+    leg_dur = [durations[k][k + 1] for k in range(n)]
+    leg_dist = [distances[k][k + 1] for k in range(n)]
+    return_leg = (durations[n][n + 1], distances[n][n + 1]) if end_mode == "depot" else None
+    sol = sequence_route(ordered, leg_dur, leg_dist, depart_min, end_mode, return_leg)
+    geometry = router.geometry(pts)
+
+    if not (folder / "route.original.json").exists():
+        for name in ("route.json", "itinerary.txt", "route.png"):
+            src = folder / name
+            if src.exists():
+                stem, suffix = src.stem, src.suffix
+                (folder / f"{stem}.original{suffix}").write_bytes(src.read_bytes())
+
+    text = itinerary_text(meta.get("date", ""), ordered, sol, d.normalized_address, depart_min, end_mode)
+    (folder / "itinerary.txt").write_text(text, encoding="utf-8")
+    rj = route_json(ordered, sol, geometry)
+    rj["manually_edited"] = True
+    (folder / "route.json").write_text(json.dumps(rj, ensure_ascii=False, indent=2), encoding="utf-8")
+    markers = [(s.geo.lat, s.geo.lon, s.operation.value) for s in ordered]
+    render_map(folder / "route.png", (d.lat, d.lon), markers, geometry, c.tile_url, c.tile_user_agent)
+    return rj
+
+
+def restore_route(folder: Path) -> bool:
+    """Откатить ручные правки: *.original.* → рабочие файлы."""
+    if not (folder / "route.original.json").exists():
+        return False
+    for name in ("route.json", "itinerary.txt", "route.png"):
+        target = folder / name
+        backup = folder / f"{target.stem}.original{target.suffix}"
+        if backup.exists():
+            target.write_bytes(backup.read_bytes())
+            backup.unlink()
+    return True
 
 
 def build_parser():

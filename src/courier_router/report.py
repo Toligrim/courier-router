@@ -103,6 +103,8 @@ def route_json(stops: list[Stop], solution: RouteSolution, geometry):
             "window": s.window.raw if s.window else None,
             "payment": s.payment.raw,
             "comment": s.comment,
+            "access": s.access,
+            "service_min": s.service_min,
             "coord_status": getattr(s, "coord_status", "ok"),
             "coord_note": getattr(s, "coord_note", ""),
             "warnings": s.warnings,
