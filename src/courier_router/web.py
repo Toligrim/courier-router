@@ -100,6 +100,10 @@ CSS = """
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html {
   background: var(--bg);
   color-scheme: var(--color-scheme);
