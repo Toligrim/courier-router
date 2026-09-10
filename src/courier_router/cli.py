@@ -6,7 +6,7 @@ from .domain import GeoPoint, Operation, Payment, Stop, TimeWindow
 from .geocode import DaDataGeocoder, PublicNominatimGeocoder, RESOLVER_VERSION
 from .llm import clean_with_openai, clean_with_anthropic
 from .optimizer import sequence_route, solve_single_vehicle
-from .parsing import parse_window, read_table
+from .parsing import normalize_phone, parse_window, read_table
 from .render import render_map
 from .report import itinerary_text, route_json
 from .routing import ORSRouter, OSRMRouter
@@ -421,7 +421,7 @@ def _stop_from_json(d: dict, default_service_min: int) -> Stop:
         source_row=int(d.get("source_row") or 0),
         operation=Operation(d.get("operation") or "delivery"),
         order_no=int(d.get("order_no") or 0),
-        phone=d.get("phone") or "",
+        phone=normalize_phone(d.get("phone") or ""),
         district=d.get("district") or "",
         address_raw=d.get("address_raw") or "",
         access=d.get("access") or "",

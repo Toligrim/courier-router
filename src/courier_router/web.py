@@ -12,7 +12,6 @@ import shutil
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote
 from uuid import uuid4
 
 import uvicorn
@@ -24,6 +23,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .cli import cmd_plan, recompute_route, restore_route
 from .config import Config
 from .geocode import strip_apartment
+from .parsing import normalize_phone, phone_dial_digits
 from .storage import Storage
 
 RUNS_ROOT = Path(os.getenv("WEB_RUNS_PATH", "data/web/runs"))
@@ -2070,11 +2070,11 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         is_pickup = stop.get("operation") == "pickup"
         operation = "Забор" if is_pickup else "Доставка"
         operation_class = "pickup" if is_pickup else "delivery"
-        phone_raw = stop.get("phone") or ""
-        phone = html.escape(phone_raw)
+        phone_disp = normalize_phone(stop.get("phone") or "")
+        phone_digits = phone_dial_digits(phone_disp)
         phone_html = (
-            f'<p><a class="phone-link" href="tel:{quote(phone_raw)}">☎ {phone}</a></p>'
-            if phone else ""
+            f'<p><a class="phone-link" href="tel:{phone_digits}">☎ {html.escape(phone_disp)}</a></p>'
+            if phone_disp else ""
         )
         window = html.escape(stop.get("window") or "нет")
         payment = html.escape(stop.get("payment") or "")

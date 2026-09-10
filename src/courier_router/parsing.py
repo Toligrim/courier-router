@@ -55,11 +55,50 @@ def parse_payment(value: object) -> Payment:
     return Payment(amount_rub=amount, method=method, raw=s)
 
 
+_PHONE_SPLIT = re.compile(r"\s*(?:/|,|;|\bили\b)\s*", re.I)
+
+
+def _format_ru_phone(digits: str) -> str | None:
+    """Цифры российского номера → «8 (XXX) XXX-XX-XX» (+ « доб. N», если есть). Иначе None."""
+    ext = ""
+    if len(digits) > 11 and digits[0] in "78":
+        digits, ext = digits[:11], digits[11:]
+    if len(digits) == 11 and digits[0] in "78":
+        digits = "8" + digits[1:]
+    elif len(digits) == 10 and digits[0] == "9":
+        digits = "8" + digits            # номер без кода страны
+    else:
+        return None
+    core = f"{digits[0]} ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
+    return f"{core} доб. {ext}" if ext else core
+
+
 def normalize_phone(value: object) -> str:
+    """Единый вид номеров, чтобы по ним нормально звонилось: ведущие +7/7/8 → 8,
+    формат «8 (921) 123-45-67». Несколько номеров в ячейке разделяются « / »."""
     s = str(value or "").strip()
     if s.endswith(".0") and s[:-2].isdigit():
         s = s[:-2]
-    return s
+    if not s:
+        return ""
+    out: list[str] = []
+    for token in _PHONE_SPLIT.split(s):
+        token = token.strip()
+        if not token:
+            continue
+        out.append(_format_ru_phone(re.sub(r"\D", "", token)) or token)
+    return " / ".join(dict.fromkeys(out))
+
+
+def phone_dial_digits(display: str) -> str:
+    """Цифры первого номера для ссылки tel: (например «89211234567»)."""
+    first = (display or "").split("/")[0].split("доб")[0]
+    digits = re.sub(r"\D", "", first)
+    if len(digits) >= 11 and digits[0] in "78":
+        digits = "8" + digits[1:11]
+    elif len(digits) == 10 and digits[0] == "9":
+        digits = "8" + digits
+    return digits
 
 
 def _rows_to_stops(rows, default_service_min: int = 10) -> list[Stop]:
