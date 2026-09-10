@@ -2,9 +2,34 @@ from courier_router.geocode import (
     DaDataGeocoder,
     RESOLVER_VERSION,
     _extract_house,
+    apartment_of,
     normalize_address_input,
     score_dadata_candidate,
+    strip_apartment,
 )
+
+
+def test_strip_apartment_removes_flat_keeps_korpus_and_litera():
+    assert strip_apartment("ул Народная, д 45 КВ 133") == "ул Народная, д 45"
+    assert strip_apartment("ул Новосёлов, д 23кв 33") == "ул Новосёлов, д 23"
+    assert strip_apartment("Индустриальный пр-кт д.27 в 93") == "Индустриальный пр-кт д.27 в"
+    assert strip_apartment("Советский пр-кт, д 34 к 3, кв 660") == "Советский пр-кт, д 34 к 3"
+    assert strip_apartment("ул Седова, д 19 литера А, кв. 30") == "ул Седова, д 19 литера А"
+    assert strip_apartment("ул Мира, д 5 офис 12") == "ул Мира, д 5"
+    # без квартиры и с уличным именем, похожим на маркер — не трогаем
+    assert strip_apartment("ул Квартальная, д 8") == "ул Квартальная, д 8"
+
+
+def test_apartment_of_pulls_flat_number_for_display():
+    assert apartment_of("ул Народная, д 45 КВ 133") == "133"
+    assert apartment_of("ул Новосёлов, д 23кв 33") == "33"
+    assert apartment_of("Советский пр-кт, д 34 к 3, кв 660") == "660"
+    assert apartment_of("ул Мира, д 5") == ""
+
+
+def test_geocoder_query_drops_apartment():
+    assert normalize_address_input("ул Народная, д 45 КВ 133").endswith("д 45")
+    assert normalize_address_input("ул Новосёлов, д 23кв 33", "Невский").endswith("д 23")
 
 
 def test_house_letter_split_by_space_or_glued_apartment():
