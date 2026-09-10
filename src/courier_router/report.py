@@ -1,14 +1,26 @@
 from __future__ import annotations
 import json
+import re
 from datetime import date
 from pathlib import Path
 from .domain import RouteSolution, Stop
+from .geocode import apartment_of, strip_apartment
 
 def hhmm(minute: int) -> str:
     return f"{(minute // 60) % 24:02d}:{minute % 60:02d}"
 
 def fmt_km(m: int) -> str:
     return f"{m/1000:.1f}".replace(".", ",")
+
+def display_address(s: Stop) -> str:
+    """Адрес для курьера: чистый адрес до дома (как его вернул геокодер) плюс
+    номер квартиры из таблицы. В геокодирование квартира не уходит, но курьеру
+    она нужна."""
+    base = ((s.geo.normalized_address if s.geo else "") or s.address_raw or "").strip()
+    flat = apartment_of(s.address_raw)
+    if flat and not re.search(r"(?:кв|офис|пом)\.?\s*№?\s*\d", base, re.I):
+        base = f"{base}, кв {flat}"
+    return base
 
 def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_address: str, depart_min: int, end_mode: str):
     lines = [
@@ -28,10 +40,11 @@ def itinerary_text(day: str, stops: list[Stop], solution: RouteSolution, depot_a
         op = "ЗАБОР" if s.operation.value == "pickup" else "ОТВОЗ"
         lines += [
             f"{number}. ETA {hhmm(visit.arrival_min)} · {op} · заказ №{s.order_no}",
-            f"   {s.geo.normalized_address if s.geo else s.address_raw}",
+            f"   {display_address(s)}",
         ]
         norm = (s.geo.normalized_address if s.geo else "") or ""
-        if s.address_raw and s.address_raw.strip().lower() not in norm.strip().lower():
+        raw_wo_flat = strip_apartment(s.address_raw)
+        if raw_wo_flat and raw_wo_flat.strip().lower() not in norm.strip().lower():
             lines.append(f"   в таблице: {s.address_raw}")
         lines += [
             f"   {s.phone}",
@@ -81,6 +94,7 @@ def route_json(stops: list[Stop], solution: RouteSolution, geometry):
             "district": s.district,
             "address_raw": s.address_raw,
             "address_normalized": s.geo.normalized_address if s.geo else None,
+            "address_display": display_address(s),
             "lat": s.geo.lat if s.geo else None,
             "lon": s.geo.lon if s.geo else None,
             "geocoder": s.geo.provider if s.geo else None,

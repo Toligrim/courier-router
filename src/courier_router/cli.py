@@ -250,7 +250,9 @@ _YANDEX_CACHE_SCHEMA = """CREATE TABLE IF NOT EXISTS yandex_maps_cache (
 def _yandex_query(raw: str) -> str:
     """Строка для поиска на Яндекс Картах из сырого адреса Excel (без квартиры)."""
     import re
-    q = re.sub(r",?\s*кв\.?\s*[0-9А-Яа-я/\-]+\s*$", "", raw or "").strip(" ,")
+
+    from .geocode import strip_apartment
+    q = strip_apartment(raw or "")
     q = re.sub(r"^\s*г\s+", "", q)
     return q
 

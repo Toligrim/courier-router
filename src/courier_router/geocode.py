@@ -32,9 +32,42 @@ def _norm_text(value: str | None) -> str:
     return " ".join(value.split())
 
 
+# Маркеры квартиры/офиса. Намеренно БЕЗ одиночного «к» и «с» — это корпус и
+# строение, они влияют на точку и должны остаться в запросе.
+_APARTMENT_MARK = r"кв|квартира|кварт|апарт(?:аменты)?|оф|офис|пом|помещение"
+_APARTMENT_RE = re.compile(
+    rf"(?:^|[\s,;]|(?<=\d))\s*(?:{_APARTMENT_MARK})\.?\s*№?\s*(\d+[а-яa-z]?)\b",
+    re.I,
+)
+# «голый» номер сразу после дома (с необязательной литерой через пробел):
+# «д.27 в 93» → «д.27 в», «д 27 93» → «д 27». Дробь дома («д 41/14») и корпус
+# («д 34 к 3») не трогаем — литерой считаем одиночную букву, кроме к/с.
+_TRAILING_FLAT_RE = re.compile(
+    r"((?:^|[\s,])(?:д|дом)\.?\s*\d+(?:/\d+)?(?:\s+(?![кс]\b)[а-яa-z](?![а-яa-z]))?)"
+    r"\s+\d{1,4}\b(?!\s*/)",
+    re.I,
+)
+
+
+def apartment_of(address: str) -> str:
+    """Достать номер квартиры/офиса из сырого адреса (для показа курьеру)."""
+    m = _APARTMENT_RE.search(address or "")
+    return m.group(1) if m else ""
+
+
+def strip_apartment(address: str) -> str:
+    """Убрать квартиру/офис из строки перед геокодированием: на поиск дома она не
+    влияет, но регулярно ломает разбор номера дома («д.27 в 93», «д 23кв 33»)."""
+    text = _APARTMENT_RE.sub(" ", address or "")
+    text = _TRAILING_FLAT_RE.sub(r"\1", text)
+    text = re.sub(r"\s*[,;]\s*[,;]+", ", ", text)
+    return re.sub(r"\s{2,}", " ", text).strip(" ,;")
+
+
 def normalize_address_input(address: str, district: str = "") -> str:
     """Conservative cleanup for courier spreadsheets before external geocoding."""
     text = " ".join((address or "").strip().split())
+    text = strip_apartment(text)
     text = re.sub(r"^\s*(?:спб|спб\.|пб)\s*[,;]?\s*", "Санкт-Петербург, ", text, flags=re.I)
     text = re.sub(r"^\s*ло\s*[,;]?\s*", "Ленинградская область, ", text, flags=re.I)
     text = re.sub(r"\bкоменданск(ий|ого|ому|им|ом)\b", r"Комендантск\1", text, flags=re.I)

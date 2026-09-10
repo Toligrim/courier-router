@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from .cli import cmd_plan
+from .geocode import strip_apartment
 
 RUNS_ROOT = Path(os.getenv("WEB_RUNS_PATH", "data/web/runs"))
 USERS_PATH = Path(os.getenv("WEB_USERS_PATH", "data/web/users.json"))
@@ -1336,7 +1337,7 @@ ROUTE_JS = """<script>
       iconAnchor: [18, 18]
     });
     const marker = L.marker([stop.lat, stop.lon], {icon}).addTo(map);
-    const address = stop.address_normalized || stop.address_raw || '';
+    const address = stop.address_display || stop.address_normalized || stop.address_raw || '';
     marker.bindPopup(
       `<b>${escapeHtml(visit.sequence)}. ${escapeHtml(address)}</b><br>` +
       `ETA ${formatMinute(visit.arrival_min)}<br>` +
@@ -1733,7 +1734,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     for visit in visits:
         stop = visit["stop"]
         lat, lon = stop["lat"], stop["lon"]
-        address = stop.get("address_normalized") or stop.get("address_raw") or ""
+        address = stop.get("address_display") or stop.get("address_normalized") or stop.get("address_raw") or ""
         nav = html.escape(f"https://yandex.ru/maps/?rtext=~{lat}%2C{lon}&rtt=auto", quote=True)
         is_pickup = stop.get("operation") == "pickup"
         operation = "Забор" if is_pickup else "Доставка"
@@ -1748,9 +1749,11 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         payment = html.escape(stop.get("payment") or "")
         comment = html.escape(stop.get("comment") or "")
         raw_addr = stop.get("address_raw") or ""
+        norm_addr = stop.get("address_normalized") or ""
+        raw_wo_flat = strip_apartment(raw_addr)
         raw_html = (
             f'<p class="raw-address">в таблице: {html.escape(raw_addr)}</p>'
-            if raw_addr and raw_addr.strip().casefold() != address.strip().casefold() else ""
+            if raw_wo_flat and raw_wo_flat.strip().casefold() not in norm_addr.strip().casefold() else ""
         )
         review = stop.get("coord_status") == "review"
         note = html.escape(stop.get("coord_note") or "Проверьте адрес на карте.")
@@ -1796,7 +1799,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
             stop = visit["stop"]
             pts.append(RoutePoint(
                 "via",
-                stop.get("address_normalized") or stop.get("address_raw") or "",
+                stop.get("address_display") or stop.get("address_normalized") or stop.get("address_raw") or "",
                 stop["lat"],
                 stop["lon"],
                 str(stop.get("order_no", "")),
