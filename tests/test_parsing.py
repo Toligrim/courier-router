@@ -1,6 +1,35 @@
 import pytest
 
-from courier_router.parsing import parse_operation, parse_payment, parse_window, read_table
+from courier_router.parsing import (
+    normalize_phone,
+    parse_operation,
+    parse_payment,
+    parse_window,
+    phone_dial_digits,
+    read_table,
+)
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("7 (921) 189-16-57", "8 (921) 189-16-57"),
+    ("79213245712", "8 (921) 324-57-12"),
+    ("+7 (981) 685-08-81", "8 (981) 685-08-81"),
+    ("7 921 946 15 67", "8 (921) 946-15-67"),
+    ("8 (921) 189-16-57", "8 (921) 189-16-57"),
+    ("9211234567", "8 (921) 123-45-67"),
+    ("79213245712.0", "8 (921) 324-57-12"),
+    ("7 (911) 901-99-03 / 7 (911) 836-53-73", "8 (911) 901-99-03 / 8 (911) 836-53-73"),
+    ("", ""),
+    ("нет", "нет"),
+])
+def test_normalize_phone_to_leading_eight(raw, expected):
+    assert normalize_phone(raw) == expected
+
+
+def test_phone_dial_digits_is_plain_eight_number():
+    assert phone_dial_digits(normalize_phone("+7 (921) 189-16-57")) == "89211891657"
+    assert phone_dial_digits(normalize_phone("7 (911) 901-99-03 / 7 (911) 836-53-73")) == "89119019903"
+    assert phone_dial_digits("") == ""
 
 
 def test_window():
