@@ -28,7 +28,7 @@ def _write_run(folder, owner: str, day: str = "2026-09-08", review: bool = False
             "summary": {"total_distance_m": 12345},
             "visits": [{
                 "sequence": 1,
-                "stop": {"coord_status": "review" if review else "ok"},
+                "stop": {"source_row": 1, "coord_status": "review" if review else "ok"},
             }],
         }),
         encoding="utf-8",
@@ -154,7 +154,58 @@ def test_home_page_surfaces_error_line_and_keeps_full_details(monkeypatch):
     assert "trace line" in page
 
 
-def _sample_route(review: bool = True):
+def _sample_route(review: bool = True, done: bool = False, second_stop: bool = False):
+    visits = [{
+        "sequence": 1,
+        "arrival_min": 600,
+        "departure_min": 610,
+        "travel_sec_from_prev": 900,
+        "distance_m_from_prev": 5000,
+        "late_by_min": 0,
+        "stop": {
+            "source_row": 1,
+            "order_no": "42",
+            "operation": "pickup",
+            "phone": "+7 900 000-00-00",
+            "payment": "Карта",
+            "window": "10:00-12:00",
+            "comment": "Позвонить заранее",
+            "address_raw": "СПб, Невский 1",
+            "address_normalized": "г Санкт-Петербург, Невский проспект, д 1",
+            "lat": 59.94,
+            "lon": 30.32,
+            "coord_status": "review" if review else "ok",
+            "coord_note": "точка требует ручной сверки" if review else "",
+            "warnings": [],
+            "done": done,
+        },
+    }]
+    if second_stop:
+        visits.append({
+            "sequence": 2,
+            "arrival_min": 630,
+            "departure_min": 640,
+            "travel_sec_from_prev": 600,
+            "distance_m_from_prev": 2000,
+            "late_by_min": 0,
+            "stop": {
+                "source_row": 2,
+                "order_no": "43",
+                "operation": "delivery",
+                "phone": "",
+                "payment": "",
+                "window": "",
+                "comment": "",
+                "address_raw": "СПб, Невский 2",
+                "address_normalized": "г Санкт-Петербург, Невский проспект, д 2",
+                "lat": 59.95,
+                "lon": 30.33,
+                "coord_status": "ok",
+                "coord_note": "",
+                "warnings": [],
+                "done": False,
+            },
+        })
     return {
         "feasible": True,
         "summary": {
@@ -163,29 +214,7 @@ def _sample_route(review: bool = True):
             "total_wait_sec": 300,
         },
         "geometry": [[59.93, 30.31], [59.94, 30.32]],
-        "visits": [{
-            "sequence": 1,
-            "arrival_min": 600,
-            "departure_min": 610,
-            "travel_sec_from_prev": 900,
-            "distance_m_from_prev": 5000,
-            "late_by_min": 0,
-            "stop": {
-                "order_no": "42",
-                "operation": "pickup",
-                "phone": "+7 900 000-00-00",
-                "payment": "Карта",
-                "window": "10:00-12:00",
-                "comment": "Позвонить заранее",
-                "address_raw": "СПб, Невский 1",
-                "address_normalized": "г Санкт-Петербург, Невский проспект, д 1",
-                "lat": 59.94,
-                "lon": 30.32,
-                "coord_status": "review" if review else "ok",
-                "coord_note": "точка требует ручной сверки" if review else "",
-                "warnings": [],
-            },
-        }],
+        "visits": visits,
     }
 
 
@@ -216,11 +245,36 @@ def test_route_page_keeps_coordinate_review_separate_from_address_and_simplifies
     assert "в таблице: СПб, Невский 1" in page
     assert "⚠ точка требует ручной сверки" in page
     assert "проверить координаты" not in page  # без отдельной пилюли — только одна строка
-    assert 'class="marker-num ${operation}${reviewClass}"' in page
+    assert 'class="marker-num ${stop.operation' in page
+    assert "stop.coord_status === 'review' ? ' review' : ''" in page
     assert 'class="metric-label">Пробег</span>' in page
     assert 'class="metric-label">Время в пути</span>' in page
     assert "Движение / ожидание" not in page
     assert "1 точка, из них 1 на сверку" in page
+
+
+def test_route_page_marks_done_stop_with_cross_and_toggle_button():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    page = web._route_page("tolya", "abc123", meta, _sample_route(review=False, done=True, second_stop=True))
+
+    assert 'class="stop is-done"' in page
+    assert 'data-toggle-done data-done="1"' in page   # выполненная точка
+    assert 'data-toggle-done data-done="0"' in page   # вторая точка ещё в работе
+    assert "↩ Вернуть в работу" in page
+    assert "✓ Выполнено" in page
+    assert "stop.done ? '✕'" in page                  # крестик вместо номера на карте
+    assert "✓ 1 выполнено" in page
+
+
+def test_route_page_excludes_done_stop_from_navigator_link():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    # единственная точка отмечена выполненной — вести в навигаторе больше некуда
+    page = web._route_page("tolya", "abc123", meta, _sample_route(review=False, done=True))
+    assert "🧭 Открыть в Навигаторе" not in page
+
+    # если рядом есть невыполненная точка — кнопка навигатора остаётся
+    page_two = web._route_page("tolya", "abc123", meta, _sample_route(review=False, done=True, second_stop=True))
+    assert "🧭 Открыть в Навигаторе" in page_two
 
 
 def test_route_page_exposes_per_stop_edit_controls():
@@ -298,6 +352,38 @@ def test_reset_route_restores_backup(monkeypatch, tmp_path):
     assert r.status_code == 303
     assert json.loads((folder / "route.json").read_text())["visits"] == [1, 2, 3]
     assert not (folder / "route.original.json").exists()
+
+
+def test_mark_stop_done_toggles_flag_without_recompute(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    folder = web._user_runs_root("tolya") / "donerun00001"
+    _write_run(folder, "tolya")
+    monkeypatch.setattr(web, "recompute_route", lambda *a, **k: pytest.fail("не должен пересчитывать маршрут"))
+
+    r = client.post("/routes/donerun00001/done", json={"row": 1, "done": True})
+    assert r.status_code == 200 and r.json() == {"ok": True, "done": True}
+    assert json.loads((folder / "route.json").read_text())["visits"][0]["stop"]["done"] is True
+
+    r = client.post("/routes/donerun00001/done", json={"row": 1, "done": False})
+    assert r.status_code == 200 and r.json() == {"ok": True, "done": False}
+    assert json.loads((folder / "route.json").read_text())["visits"][0]["stop"]["done"] is False
+
+
+def test_mark_stop_done_unknown_row_is_404(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    folder = web._user_runs_root("tolya") / "donerun00002"
+    _write_run(folder, "tolya")
+    r = client.post("/routes/donerun00002/done", json={"row": 99, "done": True})
+    assert r.status_code == 404
+
+
+def test_mark_stop_done_blocks_other_users(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path, "tolya")
+    victim = web._user_runs_root("partner") / "partnrun0002"
+    _write_run(victim, "partner")
+    r = client.post("/routes/partnrun0002/done", json={"row": 1, "done": True})
+    assert r.status_code == 404
+    assert json.loads((victim / "route.json").read_text())["visits"][0]["stop"].get("done") is None
 
 
 def test_route_page_handles_infeasible_route_without_map():
