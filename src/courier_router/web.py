@@ -1552,6 +1552,32 @@ ROUTE_JS = """<script>
     return `${hours}:${minutes}`;
   };
 
+  // Ссылка «Открыть в Навигаторе» строится из тех же точек, что и на сервере
+  // (navlinks.build_yandex_url), но пересчитывается на лету — без выполненных.
+  const buildNavigatorUrl = () => {
+    if (!geometry.length) return '';
+    const c = (x) => Number(x).toFixed(6);
+    const depot = [geometry[0][0], geometry[0][1]];
+    const remaining = visits.filter((v) => !(v.stop && v.stop.done)).map((v) => v.stop);
+    if (!remaining.length) return '';
+    const pts = [depot, ...remaining.map((s) => [s.lat, s.lon])];
+    if ((routeRoot.dataset.endMode || 'depot') === 'depot') pts.push(depot);
+    if (pts.length < 2) return '';
+    const from = pts[0], to = pts[pts.length - 1], via = pts.slice(1, -1);
+    const parts = [`lat_from=${c(from[0])}`, `lon_from=${c(from[1])}`, `lat_to=${c(to[0])}`, `lon_to=${c(to[1])}`];
+    via.forEach((p, i) => parts.push(`lat_via_${i}=${c(p[0])}&lon_via_${i}=${c(p[1])}`));
+    return 'yandexnavi://build_route_on_map?' + parts.join('&');
+  };
+
+  const refreshNavigatorLink = () => {
+    const wrap = document.querySelector('.bottom-action');
+    const link = wrap ? wrap.querySelector('.btn') : null;
+    const url = buildNavigatorUrl();
+    if (link) link.href = url || '#';
+    if (wrap) wrap.hidden = !url;
+    routeRoot.classList.toggle('has-bottom-action', !!url);
+  };
+
   const fitRoute = () => {
     map.invalidateSize(false);
     if (bounds.length) {
@@ -1661,6 +1687,7 @@ ROUTE_JS = """<script>
       const visit = visits.find((v) => String(v.sequence) === String(sequence));
       if (!visit) return;
       visit.stop.done = done;
+      refreshNavigatorLink();
       const marker = markers.get(String(sequence));
       if (!marker) return;
       marker.setIcon(buildIcon(visit.stop, sequence));
@@ -2322,13 +2349,16 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         '<p class="navigator-note">Главная кнопка закреплена снизу, чтобы маршрут можно было открыть одной рукой.</p>'
         if navi_url else ""
     )
+    # Блок рендерится всегда (даже пустой/скрытый), чтобы JS мог показать его,
+    # если позже отметить точку невыполненной и ссылка на Навигатор появится снова.
     bottom_action = (
-        f'<div class="bottom-action"><div class="bottom-action-inner"><a class="btn" href="{safe_navi_url}">🧭 Открыть в Навигаторе</a></div></div>'
-        if navi_url else ""
+        f'<div class="bottom-action"{"" if navi_url else " hidden"}>'
+        f'<div class="bottom-action-inner"><a class="btn" href="{safe_navi_url or "#"}">🧭 Открыть в Навигаторе</a></div></div>'
     )
 
     head = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-    body = f"""<div class="{route_class}" data-route-view="list" data-run-id="{html.escape(run_id, quote=True)}">
+    end_mode_attr = html.escape(meta.get("end", "depot"), quote=True)
+    body = f"""<div class="{route_class}" data-route-view="list" data-run-id="{html.escape(run_id, quote=True)}" data-end-mode="{end_mode_attr}">
 <section class="card">
   <div class="summary-head">
     <div>

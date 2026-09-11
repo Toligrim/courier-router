@@ -268,13 +268,25 @@ def test_route_page_marks_done_stop_with_cross_and_toggle_button():
 
 def test_route_page_excludes_done_stop_from_navigator_link():
     meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
-    # единственная точка отмечена выполненной — вести в навигаторе больше некуда
+    # единственная точка отмечена выполненной — вести в навигаторе больше некуда,
+    # кнопка рендерится, но скрыта (JS может её снова показать, если точку вернуть в работу)
     page = web._route_page("tolya", "abc123", meta, _sample_route(review=False, done=True))
-    assert "🧭 Открыть в Навигаторе" not in page
+    assert '<div class="bottom-action" hidden>' in page
+    assert 'href="#">🧭 Открыть в Навигаторе</a>' in page
 
-    # если рядом есть невыполненная точка — кнопка навигатора остаётся
+    # если рядом есть невыполненная точка — кнопка навигатора видна и ведёт на неё
     page_two = web._route_page("tolya", "abc123", meta, _sample_route(review=False, done=True, second_stop=True))
-    assert "🧭 Открыть в Навигаторе" in page_two
+    assert '<div class="bottom-action">' in page_two
+    assert 'href="yandexnavi://build_route_on_map?' in page_two
+
+
+def test_route_js_rebuilds_navigator_link_client_side_excluding_done_stops():
+    meta = {"date": "2026-09-09", "depart": "10:00", "end": "open", "uploaded_by": "tolya"}
+    page = web._route_page("tolya", "abc123", meta, _sample_route())
+    # ссылка на Навигатор не статична — пересчитывается в JS при каждой отметке "выполнено"
+    assert "const buildNavigatorUrl" in page
+    assert "refreshNavigatorLink" in page
+    assert 'data-end-mode="open"' in page
 
 
 def test_route_page_exposes_per_stop_edit_controls():
