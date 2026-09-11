@@ -494,6 +494,10 @@ def recompute_route(c: Config, folder: Path, order_rows: list[int],
     (folder / "itinerary.txt").write_text(text, encoding="utf-8")
     rj = route_json(ordered, sol, geometry)
     rj["manually_edited"] = True
+    for visit in rj.get("visits", []):
+        src_row = visit["stop"].get("source_row")
+        if by_row.get(src_row, {}).get("done"):
+            visit["stop"]["done"] = True
     (folder / "route.json").write_text(json.dumps(rj, ensure_ascii=False, indent=2), encoding="utf-8")
     markers = [(s.geo.lat, s.geo.lon, s.operation.value) for s in ordered]
     render_map(folder / "route.png", (d.lat, d.lon), markers, geometry, c.tile_url, c.tile_user_agent)
