@@ -7,6 +7,7 @@ from .geocode import DaDataGeocoder, PublicNominatimGeocoder, RESOLVER_VERSION
 from .llm import clean_with_openai, clean_with_anthropic
 from .optimizer import sequence_route, solve_single_vehicle
 from .parsing import normalize_phone, parse_window, read_table
+from .pdf_converter import convert_pdf_to_xlsx
 from .render import render_map
 from .report import itinerary_text, route_json
 from .routing import ORSRouter, OSRMRouter
@@ -83,6 +84,13 @@ def cmd_geocode_depot(args):
         "address": d.normalized_address, "lat": d.lat, "lon": d.lon,
         "provider": d.provider, "precision": d.precision, "confidence": d.confidence
     }, ensure_ascii=False, indent=2))
+
+
+def cmd_pdf_to_xlsx(args):
+    output = Path(args.output) if args.output else Path(args.pdf).with_suffix(".xlsx")
+    output, rows = convert_pdf_to_xlsx(args.pdf, output, language=args.lang)
+    print(f"Готово: {output.resolve()} ({len(rows)} строк)")
+    return 0
 
 
 def cmd_alias(args):
@@ -520,6 +528,11 @@ def build_parser():
     d.set_defaults(func=cmd_doctor)
     gd = sub.add_parser("geocode-depot", help="Геокодировать фиксированную базу")
     gd.set_defaults(func=cmd_geocode_depot)
+    pdf = sub.add_parser("pdf-to-xlsx", help="Конвертировать маршрутный PDF в XLSX без заголовка")
+    pdf.add_argument("pdf", help="Маршрутный PDF партнёра")
+    pdf.add_argument("output", nargs="?", help="Выходной XLSX (по умолчанию рядом с PDF)")
+    pdf.add_argument("--lang", default="rus+eng", help="Языки Tesseract (по умолчанию rus+eng)")
+    pdf.set_defaults(func=cmd_pdf_to_xlsx)
     al = sub.add_parser("alias", help="Закрепить координату за адресом вручную")
     al.add_argument("address", nargs="?", default="")
     al.add_argument("--district", default="")
@@ -530,8 +543,8 @@ def build_parser():
     al.add_argument("--list", action="store_true", help="показать все закрепления")
     al.add_argument("--delete", action="store_true", help="удалить закрепление для address")
     al.set_defaults(func=cmd_alias)
-    plan = sub.add_parser("plan", help="Построить маршрут из XLSX/CSV")
-    plan.add_argument("xlsx", help="Таблица .xlsx или .csv")
+    plan = sub.add_parser("plan", help="Построить маршрут из XLSX/CSV/PDF")
+    plan.add_argument("xlsx", help="Маршрутный лист .xlsx, .csv или .pdf")
     plan.add_argument("--date", required=True)
     plan.add_argument("--depart", default=os.getenv("DEPART_TIME","10:00"))
     plan.add_argument("--end", choices=["depot","open"], default=os.getenv("END_MODE","depot"))

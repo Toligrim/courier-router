@@ -24,6 +24,7 @@ from .cli import cmd_plan, recompute_route, restore_route
 from .config import Config
 from .geocode import strip_apartment
 from .parsing import normalize_phone, phone_dial_digits
+from .pdf_converter import convert_pdf_to_xlsx
 from .storage import Storage
 
 RUNS_ROOT = Path(os.getenv("WEB_RUNS_PATH", "data/web/runs"))
@@ -2031,13 +2032,13 @@ def _home_page(user: str, error: str = "") -> str:
     body = f"""{err}
 <section class="card">
   <h1>Новый маршрут</h1>
-  <p class="lead">Загрузите XLSX или CSV с заказами. После запуска расчёт может занять до минуты.</p>
+  <p class="lead">Загрузите XLSX, CSV или PDF с заказами. После запуска расчёт может занять до минуты.</p>
   <form id="route-form" method="post" action="/routes" enctype="multipart/form-data">
     <label class="upload" id="drop-zone" for="route-file">
-      <input class="file-input" id="route-file" type="file" name="table" accept=".xlsx,.csv" required>
+      <input class="file-input" id="route-file" type="file" name="table" accept=".xlsx,.csv,.pdf" required>
       <span class="upload-content">
         <span class="upload-icon" aria-hidden="true">↑</span>
-        <span class="upload-title">Выберите таблицу</span>
+        <span class="upload-title">Выберите маршрутный лист</span>
         <span class="upload-hint">Нажмите сюда или перетащите файл</span>
         <span class="upload-file-name" id="selected-file">Файл пока не выбран</span>
       </span>
@@ -2339,8 +2340,8 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         if not user:
             return RedirectResponse("/login", status_code=303)
         suffix = Path(table.filename or "").suffix.lower()
-        if suffix not in {".xlsx", ".csv"}:
-            return HTMLResponse(_home_page(user, "Поддерживаются только XLSX и CSV"), status_code=400)
+        if suffix not in {".xlsx", ".csv", ".pdf"}:
+            return HTMLResponse(_home_page(user, "Поддерживаются только XLSX, CSV и PDF"), status_code=400)
         payload = await table.read(MAX_UPLOAD_BYTES + 1)
         if len(payload) > MAX_UPLOAD_BYTES:
             return HTMLResponse(_home_page(user, f"Файл больше лимита {MAX_UPLOAD_BYTES // 1024 // 1024} МБ"), status_code=413)
@@ -2351,13 +2352,24 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         input_path.write_bytes(payload)
         meta = {"date": day, "depart": depart, "end": end, "uploaded_by": user, "filename": table.filename}
         (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        table_path = input_path
+        if suffix == ".pdf":
+            try:
+                table_path, _ = await run_in_threadpool(
+                    convert_pdf_to_xlsx, input_path, folder / "input.xlsx"
+                )
+            except Exception as exc:  # noqa: BLE001
+                shutil.rmtree(folder, ignore_errors=True)
+                return HTMLResponse(_home_page(user, f"Не удалось преобразовать PDF: {exc}"), status_code=400)
         args = SimpleNamespace(
-            xlsx=str(input_path), date=day, depart=depart, end=end,
+            xlsx=str(table_path), date=day, depart=depart, end=end,
             output=str(folder), allow_low_confidence=bool(allow_low_confidence),
         )
         try:
             await run_in_threadpool(cmd_plan, args)
         except Exception as exc:
+            if suffix == ".pdf":
+                shutil.rmtree(folder, ignore_errors=True)
             return HTMLResponse(_home_page(user, f"Не удалось построить маршрут: {exc}"), status_code=400)
         return RedirectResponse(f"/routes/{run_id}", status_code=303)
 

@@ -32,10 +32,26 @@ def test_phone_dial_digits_is_plain_eight_number():
     assert phone_dial_digits("") == ""
 
 
-def test_window():
-    w = parse_window("17:00-21:00")
-    assert w.start_min == 17*60
-    assert w.end_min == 21*60
+@pytest.mark.parametrize("raw, expected, start_min, end_min", [
+    ("17:00-21:00", "17:00-21:00", 17 * 60, 21 * 60),
+    ("17:00 -18-00", "17:00-18:00", 17 * 60, 18 * 60),
+    ("16.00 — 20.30", "16:00-20:30", 16 * 60, 20 * 60 + 30),
+    ("с 9:5 до 10:30", "09:05-10:30", 9 * 60 + 5, 10 * 60 + 30),
+    ("17-18", "17:00-18:00", 17 * 60, 18 * 60),
+    ("17:00:00-18:00:00", "17:00-18:00", 17 * 60, 18 * 60),
+    ("20-00-20-30", "20:00-20:30", 20 * 60, 20 * 60 + 30),
+])
+def test_window_is_parsed_and_normalized(raw, expected, start_min, end_min):
+    w = parse_window(raw)
+    assert w.start_min == start_min
+    assert w.end_min == end_min
+    assert w.raw == expected
+
+
+def test_window_normalization_keeps_non_default_start_and_end():
+    w = parse_window("16.00 — 20.30")
+    assert w.start_min == 16 * 60
+    assert w.end_min == 20 * 60 + 30
 
 
 def test_window_rejects_invalid_clock_values():
@@ -45,7 +61,32 @@ def test_window_rejects_invalid_clock_values():
         parse_window("25:00-26:00")
     with pytest.raises(ValueError):
         parse_window("23:00-24:30")
+    with pytest.raises(ValueError):
+        parse_window("123:00-14:00")
+    with pytest.raises(ValueError):
+        parse_window("17:00-18:00:30")
+    with pytest.raises(ValueError):
+        parse_window("18:00-17:00")
     assert parse_window("23:00-24:00").end_min == 24 * 60
+
+
+@pytest.mark.parametrize("raw", [
+    "17:00-18:00xyz",
+    "17:00-18:00-19:00",
+    "17:00-18:00-19",
+    "17:00 -18-00-19",
+    "17:00-18:00.19",
+    "17:00-18:00, 19:00-20:00",
+    "17:00-18:00 19",
+    "17:00-18:00 25",
+    "17:00-18:00 99",
+    "17-18-19-20",
+    "17-18 - 19-20",
+    "17-18-19:00",
+])
+def test_window_rejects_ambiguous_extra_time(raw):
+    with pytest.raises(ValueError):
+        parse_window(raw)
 
 
 def test_payment():
@@ -74,3 +115,67 @@ def test_csv_table(tmp_path):
     assert stops[0].address_raw == "Савушкина 15"
     assert stops[0].window.start_min == 10 * 60
     assert stops[1].operation.value == "pickup"
+
+
+def test_xlsx_table_normalizes_malformed_window_separator(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / "orders.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append([
+        "Отвоз", 424, "7 900 623 70 20", "Выборгский",
+        "г Санкт-Петербург, пр-кт Энгельса, д 93 кв 226", None,
+        "17:00 -18-00", "3700/перевод",
+    ])
+    ws.append([
+        "Забор", 461, "7 921 912 52 93", "Приморский",
+        "г Санкт-Петербург, ул 1-я Утиная, д 17 к 1 кв 10", None,
+        "16:00 -20:30", None,
+    ])
+    ws.append([
+        "Забор", 462, "7 921 311 08 42", "Приморский",
+        "г Санкт-Петербург, Комендантский пр-кт, д 18 кв 189", None,
+        "17:00 -18-00", None,
+    ])
+    ws.append([
+        "Отвоз", 435, "7 911 813 09 46", "Приморский",
+        "г Санкт-Петербург, Богатырский пр-кт, д 3 к 1 кв 13", None,
+        "17:00 -20:30", "3800/перевод",
+    ])
+    ws.append([
+        "Отвоз", 428, "7 961 801 90 07", "Приморский",
+        "г Санкт-Петербург, ул Парашютная, д 22 к 1 кв 271", None,
+        "17:00 -20:30", "1800/",
+    ])
+    wb.save(path)
+
+    stops = read_table(path)
+
+    assert len(stops) == 5
+    assert [stop.window.raw for stop in stops] == [
+        "17:00-18:00", "16:00-20:30", "17:00-18:00",
+        "17:00-20:30", "17:00-20:30",
+    ]
+
+
+def test_xlsx_window_error_contains_row_and_column(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / "orders.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append([
+        "Отвоз", 424, "7 900 623 70 20", "Выборгский",
+        "г Санкт-Петербург, пр-кт Энгельса, д 93 кв 226", None,
+        "17:00-18:00", None,
+    ])
+    ws.append([
+        "Забор", 461, "7 921 912 52 93", "Приморский",
+        "г Санкт-Петербург, ул 1-я Утиная, д 17 к 1 кв 10", None,
+        "17:00 -18-75", None,
+    ])
+    wb.save(path)
+
+    with pytest.raises(ValueError, match=r"Строка 2, колонка G"):
+        read_table(path)
