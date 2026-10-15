@@ -125,6 +125,21 @@ def test_recompute_route_applies_and_pins_manual_coordinate(run_folder):
     assert ("ул Тестовая, д 2", "Невский") in store.aliases
 
 
+def test_recompute_route_preserves_done_flags_across_reorder(run_folder):
+    route = json.loads((run_folder / "route.json").read_text())
+    route["visits"][1]["stop"]["done"] = True   # точка source_row=2 уже отмечена выполненной
+    (run_folder / "route.json").write_text(json.dumps(route, ensure_ascii=False))
+
+    store = _StubStore()
+    cli.recompute_route(cli.Config(), run_folder, order_rows=[3, 2, 1],
+                        deleted_rows=set(), coord_overrides={}, store=store)
+    updated = json.loads((run_folder / "route.json").read_text())
+    by_row = {v["stop"]["source_row"]: v["stop"] for v in updated["visits"]}
+    assert by_row[2].get("done") is True
+    assert not by_row[1].get("done")
+    assert not by_row[3].get("done")
+
+
 def test_restore_route_reverts_manual_edits(run_folder):
     store = _StubStore()
     cli.recompute_route(cli.Config(), run_folder, order_rows=[3, 2, 1],

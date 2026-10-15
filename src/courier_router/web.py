@@ -1184,6 +1184,29 @@ button.seq::after {
   flex: 1 1 170px;
 }
 
+.btn.done-toggle {
+  border-color: var(--ok-soft);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.btn.done-toggle:hover {
+  background: var(--ok);
+  color: var(--accent-ink);
+}
+
+.stop.is-done {
+  opacity: 0.6;
+}
+
+.stop.is-done .stop-address {
+  text-decoration: line-through;
+}
+
+.stop.is-done .seq {
+  filter: grayscale(1);
+}
+
 .leaflet-div-icon {
   border: 0 !important;
   background: var(--transparent) !important;
@@ -1217,6 +1240,11 @@ button.seq::after {
 .marker-num.review {
   outline: 4px solid var(--warn);
   outline-offset: 1px;
+}
+
+.marker-num.done {
+  --marker-bg: var(--muted);
+  opacity: 0.6;
 }
 
 .leaflet-tile-pane {
@@ -1276,6 +1304,11 @@ button.seq::after {
 .map-popup a {
   margin-top: 2px;
   font-weight: 600;
+}
+
+.map-popup-done {
+  color: var(--ok);
+  font-weight: 700;
 }
 
 .bottom-action {
@@ -1520,6 +1553,32 @@ ROUTE_JS = """<script>
     return `${hours}:${minutes}`;
   };
 
+  // Ссылка «Открыть в Навигаторе» строится из тех же точек, что и на сервере
+  // (navlinks.build_yandex_url), но пересчитывается на лету — без выполненных.
+  const buildNavigatorUrl = () => {
+    if (!geometry.length) return '';
+    const c = (x) => Number(x).toFixed(6);
+    const depot = [geometry[0][0], geometry[0][1]];
+    const remaining = visits.filter((v) => !(v.stop && v.stop.done)).map((v) => v.stop);
+    if (!remaining.length) return '';
+    const pts = [depot, ...remaining.map((s) => [s.lat, s.lon])];
+    if ((routeRoot.dataset.endMode || 'depot') === 'depot') pts.push(depot);
+    if (pts.length < 2) return '';
+    const from = pts[0], to = pts[pts.length - 1], via = pts.slice(1, -1);
+    const parts = [`lat_from=${c(from[0])}`, `lon_from=${c(from[1])}`, `lat_to=${c(to[0])}`, `lon_to=${c(to[1])}`];
+    via.forEach((p, i) => parts.push(`lat_via_${i}=${c(p[0])}&lon_via_${i}=${c(p[1])}`));
+    return 'yandexnavi://build_route_on_map?' + parts.join('&');
+  };
+
+  const refreshNavigatorLink = () => {
+    const wrap = document.querySelector('.bottom-action');
+    const link = wrap ? wrap.querySelector('.btn') : null;
+    const url = buildNavigatorUrl();
+    if (link) link.href = url || '#';
+    if (wrap) wrap.hidden = !url;
+    routeRoot.classList.toggle('has-bottom-action', !!url);
+  };
+
   const fitRoute = () => {
     map.invalidateSize(false);
     if (bounds.length) {
@@ -1544,28 +1603,33 @@ ROUTE_JS = """<script>
     }
   };
 
-  visits.forEach((visit) => {
+  const buildIcon = (stop, sequence) => L.divIcon({
+    className: 'leaflet-div-icon',
+    html: `<div class="marker-num ${stop.operation === 'pickup' ? 'pickup' : 'delivery'}` +
+      `${stop.coord_status === 'review' ? ' review' : ''}${stop.done ? ' done' : ''}">` +
+      `${stop.done ? '✕' : escapeHtml(sequence)}</div>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18]
+  });
+
+  const buildPopup = (visit) => {
     const stop = visit.stop || {};
-    const operation = stop.operation === 'pickup' ? 'pickup' : 'delivery';
-    const reviewClass = stop.coord_status === 'review' ? ' review' : '';
-    const icon = L.divIcon({
-      className: 'leaflet-div-icon',
-      html: `<div class="marker-num ${operation}${reviewClass}">${escapeHtml(visit.sequence)}</div>`,
-      iconSize: [36, 36],
-      iconAnchor: [18, 18]
-    });
-    const marker = L.marker([stop.lat, stop.lon], {icon}).addTo(map);
     const address = stop.address_display || stop.address_normalized || stop.address_raw || '';
     const windowText = stop.window ? String(stop.window).replace(/ *[-–—] */, ' – ') : 'не задано';
-    marker.bindPopup(
-      `<div class="map-popup">` +
+    const doneLine = stop.done ? `<span class="map-popup-done">✓ Выполнено</span>` : '';
+    return `<div class="map-popup">` +
       `<b>${escapeHtml(visit.sequence)}. ${escapeHtml(address)}</b>` +
+      doneLine +
       `<span class="map-popup-window">🕒 Доставка ${escapeHtml(windowText)}</span>` +
       `<span class="map-popup-eta">Прибытие ≈ ${formatMinute(visit.arrival_min)} · заказ №${escapeHtml(stop.order_no)}</span>` +
       `<a href="#stop-${escapeHtml(visit.sequence)}" data-open-list="${escapeHtml(visit.sequence)}">Показать в списке →</a>` +
-      `</div>`,
-      {autoPanPadding: [24, 24]}
-    );
+      `</div>`;
+  };
+
+  visits.forEach((visit) => {
+    const stop = visit.stop || {};
+    const marker = L.marker([stop.lat, stop.lon], {icon: buildIcon(stop, visit.sequence)}).addTo(map);
+    marker.bindPopup(buildPopup(visit), {autoPanPadding: [24, 24]});
     marker.on('popupopen', (event) => {
       const link = event.popup.getElement().querySelector('[data-open-list]');
       link?.addEventListener('click', (ev) => {
@@ -1619,7 +1683,18 @@ ROUTE_JS = """<script>
 
   // мост для модуля ручного редактирования (EDIT_JS)
   window.__routeMap = {map, markers, setRouteView, reducedMotion,
-                       fitRoute, get bounds() { return bounds; }};
+                       fitRoute, get bounds() { return bounds; },
+    setStopDone(sequence, done) {
+      const visit = visits.find((v) => String(v.sequence) === String(sequence));
+      if (!visit) return;
+      visit.stop.done = done;
+      refreshNavigatorLink();
+      const marker = markers.get(String(sequence));
+      if (!marker) return;
+      marker.setIcon(buildIcon(visit.stop, sequence));
+      marker.setPopupContent(buildPopup(visit));
+    },
+  };
 })();
 </script>"""
 
@@ -1663,6 +1738,28 @@ EDIT_JS = """<script>
         if (veil) veil.hidden = true;
         alert('Не получилось изменить маршрут:\\n' + String(err).slice(0, 200));
       });
+  };
+
+  const toggleDone = (card, btn) => {
+    if (btn.disabled) return;
+    const row = Number(card.dataset.row);
+    const nextDone = btn.dataset.done !== '1';
+    btn.disabled = true;
+    fetch('/routes/' + encodeURIComponent(runId) + '/done', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({row: row, done: nextDone}),
+    }).then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(t))))
+      .then(() => {
+        card.classList.toggle('is-done', nextDone);
+        btn.dataset.done = nextDone ? '1' : '0';
+        btn.textContent = nextDone ? '↩ Вернуть в работу' : '✓ Выполнено';
+        btn.classList.toggle('secondary', nextDone);
+        btn.classList.toggle('done-toggle', !nextDone);
+        window.__routeMap?.setStopDone(card.dataset.sequence, nextDone);
+      })
+      .catch((err) => alert('Не получилось отметить точку:\\n' + String(err).slice(0, 200)))
+      .finally(() => { btn.disabled = false; });
   };
 
   const closePanels = (except) => {
@@ -1749,6 +1846,8 @@ EDIT_JS = """<script>
       if (!confirm('Убрать эту точку из маршрута?')) return;
       const row = Number(card.dataset.row);
       applyEdit({order: currentOrder().filter((r) => r !== row), deleted: [row], coords: {}});
+    } else if (btn.hasAttribute('data-toggle-done')) {
+      toggleDone(card, btn);
     }
   });
 
@@ -2101,6 +2200,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     km = summary.get("total_distance_m", 0) / 1000
     travel = round(summary.get("total_travel_sec", 0) / 60)
     review_count = sum(1 for visit in visits if visit.get("stop", {}).get("coord_status") == "review")
+    done_count = sum(1 for visit in visits if visit.get("stop", {}).get("done"))
     stops_html = ""
     total_stops = len(visits)
 
@@ -2147,7 +2247,11 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
             f"https://yandex.ru/maps/?whatshere%5Bpoint%5D={lon_v}%2C{lat_v}&whatshere%5Bzoom%5D=18&l=map",
             quote=True,
         )
-        stops_html += f"""<article class="stop" id="stop-{visit['sequence']}" data-sequence="{visit['sequence']}" data-row="{src_row}" data-lat="{lat_v}" data-lon="{lon_v}" tabindex="0" role="button" aria-label="Показать точку {visit['sequence']} на карте">
+        is_done = bool(stop.get("done"))
+        done_article_class = " is-done" if is_done else ""
+        done_btn_class = "btn secondary" if is_done else "btn done-toggle"
+        done_btn_label = "↩ Вернуть в работу" if is_done else "✓ Выполнено"
+        stops_html += f"""<article class="stop{done_article_class}" id="stop-{visit['sequence']}" data-sequence="{visit['sequence']}" data-row="{src_row}" data-lat="{lat_v}" data-lon="{lon_v}" tabindex="0" role="button" aria-label="Показать точку {visit['sequence']} на карте">
   <div class="stop-heading-row">
     <button type="button" class="seq {operation_class}" data-pos-open aria-label="Сейчас точка №{visit['sequence']}. Нажмите, чтобы поставить на другое место">{visit['sequence']}</button>
     <h3 class="stop-address">{html.escape(address)}</h3>
@@ -2176,7 +2280,10 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     <p class="muted stop-leg">От предыдущей: {visit['distance_m_from_prev'] / 1000:.1f} км · {round(visit['travel_sec_from_prev'] / 60)} мин</p>
   </div>
   {comment_html}
-  <div class="stop-actions"><a class="btn secondary" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a></div>
+  <div class="stop-actions">
+    <a class="btn secondary" href="{nav}" target="_blank" rel="noopener">Открыть в Яндекс Картах</a>
+    <button type="button" class="{done_btn_class}" data-toggle-done data-done="{'1' if is_done else '0'}">{done_btn_label}</button>
+  </div>
   <div class="stop-edit" hidden>
     <div class="edit-row">
       <button type="button" class="btn secondary tiny" data-edit="coord">📍 Изменить координату</button>
@@ -2207,6 +2314,8 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         pts = [RoutePoint("start", "База", d_lat, d_lon)]
         for visit in visits:
             stop = visit["stop"]
+            if stop.get("done"):
+                continue
             pts.append(RoutePoint(
                 "via",
                 stop.get("address_display") or stop.get("address_normalized") or stop.get("address_raw") or "",
@@ -2214,15 +2323,17 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
                 stop["lon"],
                 str(stop.get("order_no", "")),
             ))
+        has_via = any(p.role == "via" for p in pts)
         if meta.get("end", "depot") == "depot":
             pts.append(RoutePoint("finish", "База", d_lat, d_lon))
-        if len(pts) >= 2:
+        if len(pts) >= 2 and has_via:
             navi_url = build_yandex_url(pts)
 
     review_status = (
         f'<span class="status-chip review">⚠ {review_count} на сверку</span>'
         if review_count else '<span class="status-chip ok">✓ координаты без пометок</span>'
     )
+    done_status = f'<span class="status-chip ok">✓ {done_count} выполнено</span>' if done_count else ""
     manually_edited = bool(route.get("manually_edited"))
     reset_menu = (
         f'<form method="post" action="/routes/{run_id}/reset" onsubmit="return confirm(\'Вернуть маршрут к автоматическому расчёту?\')">'
@@ -2239,13 +2350,16 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         '<p class="navigator-note">Главная кнопка закреплена снизу, чтобы маршрут можно было открыть одной рукой.</p>'
         if navi_url else ""
     )
+    # Блок рендерится всегда (даже пустой/скрытый), чтобы JS мог показать его,
+    # если позже отметить точку невыполненной и ссылка на Навигатор появится снова.
     bottom_action = (
-        f'<div class="bottom-action"><div class="bottom-action-inner"><a class="btn" href="{safe_navi_url}">🧭 Открыть в Навигаторе</a></div></div>'
-        if navi_url else ""
+        f'<div class="bottom-action"{"" if navi_url else " hidden"}>'
+        f'<div class="bottom-action-inner"><a class="btn" href="{safe_navi_url or "#"}">🧭 Открыть в Навигаторе</a></div></div>'
     )
 
     head = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
-    body = f"""<div class="{route_class}" data-route-view="list" data-run-id="{html.escape(run_id, quote=True)}">
+    end_mode_attr = html.escape(meta.get("end", "depot"), quote=True)
+    body = f"""<div class="{route_class}" data-route-view="list" data-run-id="{html.escape(run_id, quote=True)}" data-end-mode="{end_mode_attr}">
 <section class="card">
   <div class="summary-head">
     <div>
@@ -2268,7 +2382,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     <div class="metric"><span class="metric-label">Пробег</span><strong class="metric-value">{km:.1f} км</strong></div>
     <div class="metric"><span class="metric-label">Время в пути</span><strong class="metric-value">{travel} мин</strong></div>
   </div>
-  <div class="route-status-line"><span>{len(visits)} {_plural_ru(len(visits), 'точка', 'точки', 'точек')}, из них {review_count} на сверку</span>{review_status}</div>
+  <div class="route-status-line"><span>{len(visits)} {_plural_ru(len(visits), 'точка', 'точки', 'точек')}, из них {review_count} на сверку</span>{review_status}{done_status}</div>
   {navigator_note}
   <div class="route-summary-actions"><a class="btn secondary" href="/">← К загрузке</a></div>
 </section>
@@ -2440,6 +2554,39 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return HTMLResponse(f"Не удалось пересчитать маршрут: {exc}", status_code=400)
         return {"ok": True}
+
+    @app.post("/routes/{run_id}/done")
+    async def mark_stop_done(request: Request, run_id: str):
+        """Отметить точку выполненной/невыполненной. Не пересчитывает маршрут —
+        просто прячет точку из ссылки на Навигатор и помечает крестиком на карте."""
+        user = _require_user(request)
+        if not user:
+            return HTMLResponse("Нужен вход", status_code=401)
+        if not run_id.isalnum():
+            return HTMLResponse("Некорректный маршрут", status_code=400)
+        folder = _find_run_folder(user, run_id)
+        if folder is None:
+            return HTMLResponse("Маршрут не найден", status_code=404)
+        try:
+            body = await request.json()
+            row = int(body.get("row"))
+            done = bool(body.get("done"))
+        except (TypeError, ValueError, AttributeError):
+            return HTMLResponse("Некорректный запрос", status_code=400)
+        try:
+            route = json.loads((folder / "route.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return HTMLResponse("Маршрут не найден", status_code=404)
+        found = False
+        for visit in route.get("visits", []):
+            if int(visit.get("stop", {}).get("source_row") or -1) == row:
+                visit["stop"]["done"] = done
+                found = True
+                break
+        if not found:
+            return HTMLResponse("Точка не найдена", status_code=404)
+        (folder / "route.json").write_text(json.dumps(route, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": True, "done": done}
 
     @app.post("/routes/{run_id}/reset")
     async def reset_route(request: Request, run_id: str):
