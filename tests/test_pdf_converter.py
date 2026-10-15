@@ -232,3 +232,67 @@ def test_render_timeout_is_reported_as_conversion_error(monkeypatch, tmp_path):
     monkeypatch.setattr(converter.subprocess, "run", run)
     with pytest.raises(PdfConversionError, match="Рендеринг PDF превысил лимит времени"):
         converter._ocr_pages(source, "rus+eng", "tesseract")
+
+
+def _two_page_ocr():
+    lines = OCR_23.splitlines(keepends=True)
+    boundary = next(i for i, line in enumerate(lines) if line.startswith("3 Отвоз"))
+    return "".join(lines[:boundary]), "".join(lines[:2] + lines[boundary:])
+
+
+def test_multiple_pages_keep_repeated_headings_out_of_addresses():
+    first, second = _two_page_ocr()
+    rows = parse_ocr_text(first + "\f" + second)
+    assert rows == parse_ocr_text(OCR_23)
+
+
+def test_multiple_pages_still_validate_sequence_and_total():
+    first, second = _two_page_ocr()
+    with pytest.raises(PdfConversionError, match="последовательность"):
+        parse_ocr_text(first + "\f" + second.replace("3 Отвоз", "7 Отвоз"))
+    with pytest.raises(PdfConversionError, match="Количество заказов"):
+        parse_ocr_text(first + "\f" + second.replace("всего 4 выездов", "всего 5 выездов"))
+
+
+def test_multiple_pages_require_header_on_each_page():
+    first, second = _two_page_ocr()
+    second = "\n".join(second.splitlines()[2:])
+    with pytest.raises(PdfConversionError, match="не найдена строка заголовков"):
+        parse_ocr_text(first + "\f" + second)
+
+
+def test_ocr_accepts_numbered_pdfinfo_page_sizes(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from PIL import Image
+    from courier_router import pdf_converter as converter
+
+    source = tmp_path / "two-pages.pdf"
+    source.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(converter.shutil, "which", lambda name: name)
+    checked_pages = []
+
+    def run(command, **kwargs):
+        if command[0] == "pdfinfo":
+            if "-f" in command:
+                checked_pages.append(int(command[command.index("-f") + 1]))
+                return SimpleNamespace(stdout="Pages: 2\nPage    2 size: 595 x 842 pts (A4)\n")
+            return SimpleNamespace(stdout="Pages: 2\nPage size: 595 x 842 pts (A4)\n")
+        assert command[0] == "pdftoppm"
+        for page in (1, 2):
+            Image.new("RGB", (300, 400), "white").save(command[-1] + f"-{page}.png")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(converter.subprocess, "run", run)
+    first, second = _two_page_ocr()
+
+    def ocr(path, *args):
+        if Path(path).name.endswith("-preview.png"):
+            return "Маршрутный лист Тип Заказ Адрес Район Телефон Время"
+        return first if Path(path).name.startswith("page-1-") else second
+
+    monkeypatch.setattr(converter, "_run_ocr", ocr)
+    text = converter._ocr_pages(source, "rus+eng", "tesseract")
+    assert checked_pages == [2]
+    assert "\f" in text
+    assert parse_ocr_text(text) == parse_ocr_text(OCR_23)

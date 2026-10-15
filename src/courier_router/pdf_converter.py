@@ -202,23 +202,30 @@ def _parse_row(lines: list[str], row_index: int) -> PdfOrderRow:
 
 def parse_ocr_text(text: str) -> list[PdfOrderRow]:
     """Parse OCR text from the partner's printed route-sheet template."""
-    lines = [line.strip() for line in text.replace("\r", "").splitlines()]
-    header_indexes = [
-        i for i, line in enumerate(lines)
-        if "заказ" in line.lower() and "адрес" in line.lower()
-    ]
-    if not header_indexes:
+    # Keep page boundaries: each printed page repeats its title and headings,
+    # which must not become a continuation of the previous page's last address.
+    lines = []
+    for page in text.replace("\r", "").split("\f"):
+        if not page.strip():
+            continue
+        page_lines = [line.strip() for line in page.splitlines()]
+        header_index = next((
+            i for i, line in enumerate(page_lines)
+            if "заказ" in line.lower() and "адрес" in line.lower()
+        ), None)
+        if header_index is None:
+            raise PdfConversionError("В PDF не найдена строка заголовков таблицы.")
+        lines.extend(page_lines[header_index + 1:])
+    if not lines:
         raise PdfConversionError("В PDF не найдена строка заголовков таблицы.")
-    first_data_line = header_indexes[0] + 1
-    data_lines = lines[first_data_line:]
-    for line in data_lines:
+    for line in lines:
         if _NUMBERED_LINE_RE.match(line) and not _ROW_RE.match(line) and not line.isdigit():
             raise PdfConversionError(f"Не удалось распознать строку заказа: {line!r}")
 
-    starts = [i for i, line in enumerate(lines) if i >= first_data_line and _ROW_RE.match(line)]
+    starts = [i for i, line in enumerate(lines) if _ROW_RE.match(line)]
     if not starts:
         raise PdfConversionError("В PDF не найдены строки заказов. Проверьте шаблон и качество скана.")
-    for line in lines[first_data_line:starts[0]]:
+    for line in lines[:starts[0]]:
         if line:
             raise PdfConversionError(f"Неизвестный текст перед первой строкой заказа: {line!r}")
 
@@ -318,7 +325,10 @@ def _ocr_pages(pdf_path: Path, language: str, tesseract_command: str) -> str:
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             raise PdfConversionError("Не удалось прочитать размер страницы PDF.") from exc
-        size_match = re.search(r"(?m)^Page size:\s*([\d.]+)\s+x\s+([\d.]+)\s+pts", page_info.stdout)
+        size_match = re.search(
+            r"(?m)^Page(?:\s+\d+)?\s+size:\s*([\d.]+)\s+x\s+([\d.]+)\s+pts",
+            page_info.stdout,
+        )
         if not size_match:
             raise PdfConversionError("Не удалось определить размер страницы PDF.")
         width_px = float(size_match.group(1)) / 72 * _OCR_DPI
@@ -370,7 +380,7 @@ def _ocr_pages(pdf_path: Path, language: str, tesseract_command: str) -> str:
                 rotated_path = Path(temp) / f"{page.stem}-oriented.png"
                 image.rotate(angle, expand=True).save(rotated_path)
                 ocr_text.append(_run_ocr(rotated_path, tesseract_command, language, remaining()))
-        return "\n".join(ocr_text)
+        return "\f".join(ocr_text)
 
 
 def write_xlsx(rows: list[PdfOrderRow], output_path: str | Path) -> Path:
