@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -133,6 +134,8 @@ def test_home_page_has_dropzone_progress_overlay_and_disabled_submit(monkeypatch
     monkeypatch.setattr(web, "_list_runs", lambda user: [])
     page = web._home_page("tolya")
 
+    assert ".pdf" in page
+    assert "XLSX, CSV или PDF" in page
     assert 'id="drop-zone"' in page
     assert 'id="selected-file"' in page
     assert 'id="build-submit" type="submit" disabled' in page
@@ -142,6 +145,76 @@ def test_home_page_has_dropzone_progress_overlay_and_disabled_submit(monkeypatch
     assert "pageshow" in page
     assert "prefers-color-scheme: dark" in page
     assert "safe-area-inset-bottom" in page
+
+
+def test_pdf_upload_is_converted_before_planning(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+    calls = {}
+
+    def fake_convert(pdf_path, xlsx_path):
+        calls["pdf"] = pdf_path
+        calls["xlsx"] = xlsx_path
+        xlsx_path.write_bytes(b"converted")
+        return xlsx_path, []
+
+    def fake_plan(args):
+        calls["args"] = args
+
+    monkeypatch.setattr(web, "convert_pdf_to_xlsx", fake_convert)
+    monkeypatch.setattr(web, "cmd_plan", fake_plan)
+    response = client.post(
+        "/routes",
+        data={"day": "2026-09-23", "depart": "10:00", "end": "open"},
+        files={"table": ("route.pdf", b"%PDF-test", "application/pdf")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert calls["pdf"].suffix == ".pdf"
+    assert calls["xlsx"].suffix == ".xlsx"
+    assert Path(calls["args"].xlsx) == Path(calls["xlsx"])
+
+
+def test_failed_pdf_conversion_cleans_uploaded_files(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+
+    def fake_convert(*args):
+        raise ValueError("неподдержанный шаблон")
+
+    monkeypatch.setattr(web, "convert_pdf_to_xlsx", fake_convert)
+    response = client.post(
+        "/routes",
+        data={"day": "2026-09-23", "depart": "10:00", "end": "open"},
+        files={"table": ("bad.pdf", b"%PDF-test", "application/pdf")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert not list((tmp_path / "runs").rglob("input.pdf"))
+
+
+def test_failed_pdf_plan_cleans_converted_files(monkeypatch, tmp_path):
+    client = _client_logged_in(monkeypatch, tmp_path)
+
+    def fake_convert(pdf_path, xlsx_path):
+        xlsx_path.write_bytes(b"converted")
+        return xlsx_path, []
+
+    def fake_plan(args):
+        raise RuntimeError("route failed")
+
+    monkeypatch.setattr(web, "convert_pdf_to_xlsx", fake_convert)
+    monkeypatch.setattr(web, "cmd_plan", fake_plan)
+    response = client.post(
+        "/routes",
+        data={"day": "2026-09-23", "depart": "10:00", "end": "open"},
+        files={"table": ("bad-plan.pdf", b"%PDF-test", "application/pdf")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert not list((tmp_path / "runs").rglob("input.pdf"))
+    assert not list((tmp_path / "runs").rglob("input.xlsx"))
 
 
 def test_home_page_surfaces_error_line_and_keeps_full_details(monkeypatch):
