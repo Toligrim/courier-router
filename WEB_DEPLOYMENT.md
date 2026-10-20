@@ -102,6 +102,18 @@ sudo systemctl enable --now courier-router-web
 sudo systemctl status courier-router-web
 ```
 
+При обновлении проверьте дополнительные настройки systemd:
+
+```bash
+systemctl show courier-router-web -p WorkingDirectory -p ExecStart -p DropInPaths
+```
+
+`PYTHONPATH` в старом drop-in может направлять импорт в другую копию проекта,
+даже если `WorkingDirectory` и `ExecStart` указывают на обновлённую папку.
+Удалите устаревшую настройку, затем выполните `daemon-reload` и перезапустите
+сервис. После этого проверьте загрузку файла через работающий веб-интерфейс:
+одного успешного запуска тестов из папки проекта недостаточно.
+
 ## Публикация через VPS
 
 Рекомендуемая схема для домашнего Raspberry Pi:

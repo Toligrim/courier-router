@@ -150,7 +150,9 @@ def _cache_matches_geocoder(c, cached) -> bool:
         return False
     provider = str(getattr(cached, "provider", ""))
     if c.geocoder == "yandex":
-        return provider == "yandex_maps" and _resolver_meta(cached).get("primary") is True
+        resolver = _resolver_meta(cached)
+        return (provider == "yandex_maps" and resolver.get("primary") is True
+                and resolver.get("version") == RESOLVER_VERSION)
     if c.geocoder == "dadata":
         resolver = _resolver_meta(cached)
         return provider in {"dadata_suggest", "dadata_clean"} and resolver.get("version") == RESOLVER_VERSION
@@ -216,9 +218,10 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             s.warnings.append("Сильное расхождение исходного и найденного адреса")
             if not allow_low_confidence:
                 _forget_rejected_yandex(store, s.geo)
+                found_address = resolver.get("yandex_title") or s.geo.normalized_address
                 raise RuntimeError(
                     f"Строка {s.source_row}: найденный адрес сильно расходится с исходным. "
-                    f"Исходный: {s.address_raw!r}. Найдено: {s.geo.normalized_address!r}.{hint}"
+                    f"Исходный: {s.address_raw!r}. Найдено: {found_address!r}.{hint}"
                 )
 
         outside_expected_area = not (58.2 <= s.geo.lat <= 61.7 and 26.5 <= s.geo.lon <= 36.5)

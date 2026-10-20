@@ -535,7 +535,11 @@ class YandexMapsGeocoder:
                     continue
             words = set(ym._norm(part).split()) - ym._GENERIC - {"г", "город", "д", "россия", "рф"}
             missing = bool(words - hay)
-            if re.search(r"обл|район|р-н", part, re.I):
+            # House cards can omit administrative details such as "тер Осиновая
+            # Роща" while retaining the matching city, settlement, street and house.
+            # Missing details require review, not rejection of the whole route.
+            territory = re.match(r"\s*(?:тер|территория)\.?(?:\s|$)", part, re.I)
+            if territory or re.search(r"обл|район|р-н", part, re.I):
                 incomplete |= missing
             else:
                 mismatch |= missing
@@ -546,6 +550,7 @@ class YandexMapsGeocoder:
             precision="house" if y.is_house else "unknown",
             confidence=0.95 if confirmed else 0.65, provider_ref=y.url,
             raw={"_resolver": {
+                "version": RESOLVER_VERSION,
                 "status": "strong_mismatch" if mismatch else "verified" if confirmed else "review",
                 "source": "yandex_maps", "primary": True, "query": query, "score": score,
                 "yandex_title": y.title, "yandex_subtitle": y.subtitle,
