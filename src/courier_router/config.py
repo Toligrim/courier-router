@@ -16,8 +16,8 @@ class Config:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-    geocoder: str = os.getenv("GEOCODER", "dadata").lower()
-    dadata_use_clean: bool = os.getenv("DADATA_USE_CLEAN", "1").strip().lower() not in {"0", "false", "no", ""}
+    geocoder: str = os.getenv("GEOCODER", "yandex").lower()
+    dadata_use_clean: bool = os.getenv("DADATA_USE_CLEAN", "0").strip().lower() not in {"0", "false", "no", ""}
     router: str = os.getenv("ROUTER", "ors").lower()
     db_path: str = os.getenv("DB_PATH", "data/cache/courier-router.db")
     depot_address: str = os.getenv("DEPOT_ADDRESS", "ул Костюшко, д 2, Санкт-Петербург")

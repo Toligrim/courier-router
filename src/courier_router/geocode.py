@@ -474,6 +474,86 @@ class DaDataGeocoder:
         )
 
 
+class YandexMapsGeocoder:
+    """Primary geocoder using the same Yandex Maps lookup as the cross-check."""
+
+    def __init__(self):
+        from . import yandex_maps as ym
+        self.lookup = ym.lookup_batch
+        self._results = {}
+
+    @staticmethod
+    def query(address: str, district: str = "") -> str:
+        return re.sub(r"^\s*г\s+", "", normalize_address_input(address, district))
+
+    def prefetch(self, addresses) -> None:
+        queries = dict.fromkeys(self.query(address, district) for address, district in addresses)
+        jobs = [(q, q, None) for q in queries if q not in self._results]
+        if jobs:
+            found = self.lookup(jobs)
+            self._results.update({q: found.get(q) for q, _, _ in jobs})
+
+    def geocode(self, address: str, district: str = "") -> GeoPoint:
+        from . import yandex_maps as ym
+        query = self.query(address, district)
+        self.prefetch([(address, district)])
+        y = self._results[query]
+        if y is None:
+            raise ValueError(f"Яндекс Карты не нашли адрес: {address}")
+        score = ym._match_score(query, y.title, y.subtitle)
+        house = ym._house_num(query)
+        found_house = ym._house_num(y.title) or ym._house_num(y.subtitle)
+        mismatch = score < 0.55 or (
+            house is not None and found_house is not None
+            and house != found_house and not _same_house_number(house, found_house)
+        )
+        incomplete = False
+        for pattern in (
+            r"(?:\b|\d)\s*(?:к|корп(?:ус)?)\.?\s*(\d+[а-яa-z]?)\b",
+            r"(?:\b|\d)\s*стр(?:оение)?\.?\s*(\d+[а-яa-z]?)\b",
+            r"\bлит(?:ера)?[.\s]+([а-яa-z0-9]+)\b",
+        ):
+            requested = re.search(pattern, query, re.I)
+            found = re.search(pattern, y.title, re.I)
+            if requested:
+                incomplete |= found is None
+                mismatch |= found is not None and requested.group(1).lower() != found.group(1).lower()
+
+        # Check locality as written in the address, excluding the courier's
+        # district column. Several towns in the region share street/house names.
+        hay = set(ym._norm(f"{y.title} {y.subtitle}").split())
+        street_seen = False
+        for part in normalize_address_input(address).split(","):
+            explicit_locality = re.match(
+                r"\s*(?:г|город|деревня|дер|пос[её]лок|пос|село|д)\.?\s+[а-яa-z]", part, re.I,
+            )
+            if not explicit_locality:
+                if re.search(r"\d", part) or ym._STREET_AFTER.search(part) or ym._STREET_BEFORE.search(part):
+                    street_seen = True
+                    continue
+                if street_seen:
+                    continue
+            words = set(ym._norm(part).split()) - ym._GENERIC - {"г", "город", "д", "россия", "рф"}
+            missing = bool(words - hay)
+            if re.search(r"обл|район|р-н", part, re.I):
+                incomplete |= missing
+            else:
+                mismatch |= missing
+
+        confirmed = y.is_house and not mismatch and not incomplete and score >= 1.0 and found_house is not None
+        return GeoPoint(
+            lat=y.lat, lon=y.lon, provider="yandex_maps", normalized_address=address,
+            precision="house" if y.is_house else "unknown",
+            confidence=0.95 if confirmed else 0.65, provider_ref=y.url,
+            raw={"_resolver": {
+                "status": "strong_mismatch" if mismatch else "verified" if confirmed else "review",
+                "source": "yandex_maps", "primary": True, "query": query, "score": score,
+                "yandex_title": y.title, "yandex_subtitle": y.subtitle,
+                "candidates": [{"value": y.title}],
+            }},
+        )
+
+
 class PublicNominatimGeocoder:
     """Small-volume fallback only. Respect OSMF Nominatim public usage policy."""
     def __init__(self, user_agent: str, timeout: float = 20):

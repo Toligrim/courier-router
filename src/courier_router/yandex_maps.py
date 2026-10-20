@@ -1,5 +1,5 @@
-"""Headless Yandex Maps toponym lookup (sync Playwright). Optional second source
-for the DaData cross-check / fallback — NOT the primary geocoder.
+"""Headless Yandex Maps toponym lookup (sync Playwright).
+Used by the primary geocoder and the optional coordinate cross-check / fallback.
 
 lookup_batch([(key, address, (near_lat, near_lon)), ...]) -> {key: YResult | None}
 
@@ -46,7 +46,8 @@ class Unavailable(RuntimeError):
 
 
 def _norm(s: str) -> str:
-    return " ".join(re.sub(r"[^0-9a-zа-яё]+", " ", (s or "").lower().replace("ё", "е")).split())
+    s = re.sub(r"(?<=[0-9a-zа-яё])-(?=[a-zа-яё])", "", (s or "").lower())
+    return " ".join(re.sub(r"[^0-9a-zа-яё]+", " ", s.replace("ё", "е")).split())
 
 
 _MARK = (r"ул|улица|пр|пр-?кт|проспект|пер|переулок|ш|шоссе|наб|набережная|"
@@ -58,16 +59,27 @@ _STREET_BEFORE = re.compile(rf"(?:^|,)\s*([^,]+?)\s+(?:{_MARK})\b", re.I)
 def _street_tokens(s: str) -> set[str]:
     m = _STREET_AFTER.search(s or "") or _STREET_BEFORE.search(s or "")
     part = m.group(1) if m else (s or "")
-    part = re.sub(r"\b(?:д|дом|кв|литера?|корп(?:ус)?|стр(?:оение)?)\.?\s*[0-9а-яa-z/]*", " ", part, flags=re.I)
-    return {t for t in _norm(part).split() if t not in _GENERIC and not t.isdigit() and len(t) >= 3}
+    # In "1-я линия Васильевского острова" the name continues after "линия".
+    if m and re.search(r"\bлиния\b", m.group(0), re.I):
+        part += " " + (s or "")[m.end():].split(",", 1)[0]
+    part = re.sub(r"\b(?:д|дом|кв|литера?|корп(?:ус)?|стр(?:оение)?)\.?\s*(?:[0-9]+[а-яa-z/]*|[а-яa-z]\b)",
+                  " ", part, flags=re.I)
+    return {t for t in _norm(part).split() if t not in _GENERIC and not t.isdigit()
+            and (len(t) >= 3 or re.fullmatch(r"\d+[а-яa-z]+", t))}
 
 
 def _house_num(s: str) -> str | None:
-    m = re.search(r"(?:^|[ ,])(?:д|дом)\.?\s*([0-9]+[а-яa-z]?(?:/[0-9]+)?)", s or "", re.I)
+    # A compact block (17к2) is not a house letter (17а). Ignore postal codes
+    # and the coordinate/action text appended by the Yandex card subtitle.
+    s = re.split(r"координаты\s*:", s or "", maxsplit=1, flags=re.I)[0]
+    s = re.sub(r"(?:\b|(?<=\d))\s*(?:к|корп(?:ус)?|стр(?:оение)?)\.?\s*\d+[а-яa-z]?\b",
+               " ", s, flags=re.I)
+    number = r"[0-9]{1,4}(?:/[0-9]+)?(?:[а-яa-z](?![а-яa-z0-9]))?"
+    m = re.search(rf"(?:^|[ ,])(?:д|дом)\.?\s*({number})", s, re.I)
     if m:
-        return _norm(m.group(1))
-    nums = re.findall(r"\b([0-9]{1,4}[а-яa-z]?(?:/[0-9]+)?)\b", s or "")
-    return _norm(nums[-1]) if nums else None
+        return m.group(1).lower()
+    nums = re.findall(rf"\b({number})(?=\b|к[0-9])", s, re.I)
+    return nums[-1].lower() if nums else None
 
 
 def _match_score(query: str, title: str, subtitle: str) -> float:

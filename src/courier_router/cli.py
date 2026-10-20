@@ -3,7 +3,7 @@ import argparse, json, os, platform, sys
 from pathlib import Path
 from .config import Config
 from .domain import GeoPoint, Operation, Payment, Stop, TimeWindow
-from .geocode import DaDataGeocoder, PublicNominatimGeocoder, RESOLVER_VERSION
+from .geocode import DaDataGeocoder, PublicNominatimGeocoder, YandexMapsGeocoder, RESOLVER_VERSION
 from .llm import clean_with_openai, clean_with_anthropic
 from .optimizer import sequence_route, solve_single_vehicle
 from .parsing import normalize_phone, parse_window, read_table
@@ -23,6 +23,8 @@ def minutes(s: str) -> int:
 
 
 def get_geocoder(c: Config):
+    if c.geocoder == "yandex":
+        return YandexMapsGeocoder()
     if c.geocoder == "dadata":
         return DaDataGeocoder(c.dadata_token, c.dadata_secret, use_clean=c.dadata_use_clean)
     if c.geocoder == "nominatim":
@@ -147,16 +149,35 @@ def _cache_matches_geocoder(c, cached) -> bool:
     if not cached:
         return False
     provider = str(getattr(cached, "provider", ""))
+    if c.geocoder == "yandex":
+        return provider == "yandex_maps" and _resolver_meta(cached).get("primary") is True
     if c.geocoder == "dadata":
         resolver = _resolver_meta(cached)
         return provider in {"dadata_suggest", "dadata_clean"} and resolver.get("version") == RESOLVER_VERSION
     return provider == c.geocoder
 
 
+def _forget_rejected_yandex(store, geo):
+    resolver = _resolver_meta(geo)
+    if resolver.get("primary") is not True or not resolver.get("query"):
+        return
+    key = " ".join(resolver["query"].lower().replace("ё", "е").split())
+    store.con.execute("DELETE FROM yandex_maps_cache WHERE cache_key=?", (key,))
+    store.con.commit()
+
+
 def geocode_stops(c, stops, store, allow_low_confidence=False):
     g = get_geocoder(c)
     report = []
     get_alias = getattr(store, "get_alias", None)
+    if isinstance(g, YandexMapsGeocoder):
+        g.lookup = lambda jobs: _yandex_lookup_cached(c, store, jobs, retry_misses=True)
+        pending = [
+            (s.address_raw, s.district) for s in stops
+            if not (get_alias and get_alias(s.address_raw, s.district))
+            and not _cache_matches_geocoder(c, store.get_geocode(s.address_raw, s.district))
+        ]
+        g.prefetch(pending)
     for s in stops:
         alias = get_alias(s.address_raw, s.district) if get_alias else None
         cached = store.get_geocode(s.address_raw, s.district)
@@ -173,7 +194,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
                 source = c.geocoder if not cached else f"{c.geocoder}:cache-refresh"
             except Exception as first:
                 fallback = None
-                if getattr(c, "yandex_crosscheck", False):
+                if c.geocoder != "yandex" and getattr(c, "yandex_crosscheck", False):
                     fallback = _yandex_geopoint(c, store, s.address_raw)
                 if fallback is not None:
                     s.geo = fallback
@@ -194,6 +215,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             hint = f" Лучшие варианты: {'; '.join(candidate_values[:3])}" if candidate_values else ""
             s.warnings.append("Сильное расхождение исходного и найденного адреса")
             if not allow_low_confidence:
+                _forget_rejected_yandex(store, s.geo)
                 raise RuntimeError(
                     f"Строка {s.source_row}: найденный адрес сильно расходится с исходным. "
                     f"Исходный: {s.address_raw!r}. Найдено: {s.geo.normalized_address!r}.{hint}"
@@ -203,6 +225,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
         if outside_expected_area:
             s.warnings.append("Координата находится вне ожидаемой зоны СПб/Ленобласти")
             if not allow_low_confidence:
+                _forget_rejected_yandex(store, s.geo)
                 raise RuntimeError(
                     f"Строка {s.source_row}: геокодер вернул точку вне СПб/Ленобласти: "
                     f"{s.geo.lat}, {s.geo.lon}"
@@ -226,6 +249,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
         if not cache_valid:
             store.put_geocode(s.address_raw, s.district, s.geo)
 
+        provider = str(getattr(s.geo, "provider", ""))
         report.append({
             "row": s.source_row, "order_no": s.order_no, "raw": s.address_raw,
             "normalized": s.geo.normalized_address, "lat": s.geo.lat, "lon": s.geo.lon,
@@ -238,13 +262,16 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
             "resolver_candidates": resolver.get("candidates", []),
-            "dadata_lat": s.geo.lat, "dadata_lon": s.geo.lon,
-            "yandex_lat": None, "yandex_lon": None, "delta_m": None,
-            "coord_source": source if source in {"yandex_fallback", "alias"} else "dadata",
+            "dadata_lat": s.geo.lat if provider.startswith("dadata") else None,
+            "dadata_lon": s.geo.lon if provider.startswith("dadata") else None,
+            "yandex_lat": s.geo.lat if provider == "yandex_maps" else None,
+            "yandex_lon": s.geo.lon if provider == "yandex_maps" else None, "delta_m": None,
+            "coord_source": (source if source in {"yandex_fallback", "alias"}
+                             else "yandex" if c.geocoder == "yandex" else c.geocoder),
             "coord_status": getattr(s, "coord_status", "ok"), "coord_note": getattr(s, "coord_note", ""),
         })
 
-    if getattr(c, "yandex_crosscheck", False):
+    if c.geocoder != "yandex" and getattr(c, "yandex_crosscheck", False):
         _yandex_crosscheck(c, stops, report, store)
     return report
 
@@ -265,7 +292,7 @@ def _yandex_query(raw: str) -> str:
     return q
 
 
-def _yandex_lookup_cached(c, store, jobs):
+def _yandex_lookup_cached(c, store, jobs, retry_misses=False):
     """jobs: [(key, query, (near_lat, near_lon))] -> {key: YResult|None}. Кэш в SQLite."""
     from . import yandex_maps as ym
     store.con.executescript(_YANDEX_CACHE_SCHEMA)
@@ -275,7 +302,7 @@ def _yandex_lookup_cached(c, store, jobs):
         row = store.con.execute(
             "SELECT lat,lon,title,subtitle,url,is_house,found FROM yandex_maps_cache WHERE cache_key=?",
             (ck,)).fetchone()
-        if row is None:
+        if row is None or (retry_misses and not row[6]):
             todo.append((key, query, near, ck))
         elif not row[6]:
             result[key] = None

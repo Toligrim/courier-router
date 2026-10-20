@@ -34,8 +34,14 @@ PDF этого печатного шаблона принимается чере
 
 ## Архитектура MVP
 
-Excel → deterministic parser → DaData → ORS Matrix → OR-Tools →
+Excel → deterministic parser → Яндекс Карты → ORS Matrix → OR-Tools →
 ORS Directions → Pillow renderer → TXT/JSON/PNG.
+
+По умолчанию `GEOCODER=yandex`: адреса ищутся только в Яндекс Картах,
+без обращений к DaData. Для браузера после установки пакета выполните
+`python -m playwright install chromium`. Старый кэш DaData автоматически
+переоценивается через Яндекс; ручные закрепления координат сохраняются.
+Адреса без подтверждённого дома помечаются для проверки на карте.
 
 Затем ORS можно заменить на локальный OSRM одной настройкой `ROUTER=osrm`.
 

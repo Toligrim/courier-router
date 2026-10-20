@@ -9,10 +9,10 @@
 - Provider adapters are replaceable.
 
 ## Current MVP
-DaData + ORS + OR-Tools + SQLite + custom Pillow/OSM tile renderer.
+Yandex Maps + ORS + OR-Tools + SQLite + custom Pillow/OSM tile renderer.
 
 ## Local target
-DaData/Nominatim + local OSRM + OR-Tools + SQLite + renderer.
+Yandex Maps + local OSRM + OR-Tools + SQLite + renderer.
 
 ## Pickup/delivery
 The domain model contains `shipment_id`, but v0.1 treats rows as independent jobs.

@@ -23,6 +23,7 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 pip install -e '.[dev]'
+python -m playwright install --with-deps chromium
 ```
 
 Проверка архитектуры и OR-Tools:
@@ -42,18 +43,16 @@ cp .env.example .env
 nano .env
 ```
 
-Для самого простого рабочего режима нужны:
-- `DADATA_TOKEN`
-- `DADATA_SECRET`
+Для самого простого рабочего режима нужен:
 - `ORS_API_KEY`
 
 Оставить:
-- `GEOCODER=dadata`
+- `GEOCODER=yandex`
 - `ROUTER=ors`
 - `LLM_PROVIDER=none`
 
-LLM не обязателен для первого запуска: DaData сам стандартизует российский адрес.
-LLM можно включить после базовой проверки.
+Геокодирование выполняют Яндекс Карты через Chromium. Ключи DaData не нужны,
+обращения к DaData не выполняются. LLM можно включить после базовой проверки.
 
 ## 4. Инициализировать БД
 
@@ -190,7 +189,7 @@ pytest -q
 2. Низкоточная геокодировка не должна молча приниматься как правильный дом.
 3. Стандартные OSM tiles используются только как небольшой online basemap.
    Не делать массовый offline download с tile.openstreetmap.org.
-4. DaData/ORS/LLM требуют интернет; с локальным OSRM уже известные координаты можно
+4. Яндекс Карты/ORS/LLM требуют интернет; с локальным OSRM уже известные координаты можно
    оптимизировать без routing API.
 5. Текущая версия считает `Забор` и `Отвоз` независимыми заданиями. Shipment-пары
    предусмотрены в модели, но автоматическое связывание по номеру заказа отключено,
