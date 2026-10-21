@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse, json, os, platform, sys
 from pathlib import Path
+import httpx
 from .config import Config
 from .domain import GeoPoint, Operation, Payment, Stop, TimeWindow
 from .geocode import DaDataGeocoder, PublicNominatimGeocoder, YandexMapsGeocoder, RESOLVER_VERSION
@@ -10,8 +11,9 @@ from .parsing import normalize_phone, parse_window, read_table
 from .pdf_converter import convert_pdf_to_xlsx
 from .render import render_map
 from .report import itinerary_text, route_json
-from .routing import ORSRouter, OSRMRouter
+from .routing import ORSRouter, OSRMRouter, RETRYABLE_ROUTING_STATUS
 from .storage import Storage
+from .address_dictionary import AddressDictionary, NORMALIZER_VERSION
 
 
 def minutes(s: str) -> int:
@@ -24,7 +26,9 @@ def minutes(s: str) -> int:
 
 def get_geocoder(c: Config):
     if c.geocoder == "yandex":
-        return YandexMapsGeocoder()
+        directory = getattr(c, "address_dictionary_dir", "")
+        dictionary = AddressDictionary.open_current(directory) if directory else None
+        return YandexMapsGeocoder(dictionary)
     if c.geocoder == "dadata":
         return DaDataGeocoder(c.dadata_token, c.dadata_secret, use_clean=c.dadata_use_clean)
     if c.geocoder == "nominatim":
@@ -58,6 +62,30 @@ def depot(c: Config, geocoder=None):
     if geocoder is None:
         geocoder = get_geocoder(c)
     return geocoder.geocode(c.depot_address, "")
+
+
+def route_geometry(router, coords):
+    """Fall back to point-to-point lines when a transient outage only affects
+    map geometry; the matrix-derived order, distance and ETA remain intact."""
+    try:
+        return router.geometry(coords), None
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status not in RETRYABLE_ROUTING_STATUS:
+            raise
+        detail = f"HTTP {status}"
+    except httpx.TransportError:
+        detail = "сетевая ошибка"
+
+    warning = (
+        f"Не удалось получить дорожную геометрию ({detail}); на карте показаны "
+        "прямые линии между точками. Порядок и ETA рассчитаны по дорожной матрице."
+    )
+    return list(coords), warning
+
+
+def _append_route_warning(text: str, warning: str | None) -> str:
+    return f"{text.rstrip()}\n\n⚠ {warning}\n" if warning else text
 
 
 def cmd_doctor(args):
@@ -145,14 +173,16 @@ def _clear_coord_flag(s, r: dict | None = None) -> None:
         r["requires_review"] = False
 
 
-def _cache_matches_geocoder(c, cached) -> bool:
+def _cache_matches_geocoder(c, cached, geocoder=None) -> bool:
     if not cached:
         return False
     provider = str(getattr(cached, "provider", ""))
     if c.geocoder == "yandex":
         resolver = _resolver_meta(cached)
         return (provider == "yandex_maps" and resolver.get("primary") is True
-                and resolver.get("version") == RESOLVER_VERSION)
+                and resolver.get("version") == RESOLVER_VERSION
+                and resolver.get("dictionary_version") == getattr(geocoder, "dictionary_version", None)
+                and resolver.get("normalizer_version") == NORMALIZER_VERSION)
     if c.geocoder == "dadata":
         resolver = _resolver_meta(cached)
         return provider in {"dadata_suggest", "dadata_clean"} and resolver.get("version") == RESOLVER_VERSION
@@ -168,8 +198,8 @@ def _forget_rejected_yandex(store, geo):
     store.con.commit()
 
 
-def geocode_stops(c, stops, store, allow_low_confidence=False):
-    g = get_geocoder(c)
+def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None):
+    g = geocoder if geocoder is not None else get_geocoder(c)
     report = []
     get_alias = getattr(store, "get_alias", None)
     if isinstance(g, YandexMapsGeocoder):
@@ -177,13 +207,13 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
         pending = [
             (s.address_raw, s.district) for s in stops
             if not (get_alias and get_alias(s.address_raw, s.district))
-            and not _cache_matches_geocoder(c, store.get_geocode(s.address_raw, s.district))
+            and not _cache_matches_geocoder(c, store.get_geocode(s.address_raw, s.district), g)
         ]
         g.prefetch(pending)
     for s in stops:
         alias = get_alias(s.address_raw, s.district) if get_alias else None
         cached = store.get_geocode(s.address_raw, s.district)
-        cache_valid = _cache_matches_geocoder(c, cached)
+        cache_valid = _cache_matches_geocoder(c, cached, g)
         if alias is not None:
             s.geo = alias
             source = "alias"
@@ -261,6 +291,8 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "outside_expected_area": outside_expected_area,
             "resolver_status": resolver_status,
             "resolver_version": resolver.get("version"),
+            "dictionary_version": resolver.get("dictionary_version"),
+            "normalization": resolver.get("normalization"),
             "resolver_score": resolver.get("score"),
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
@@ -279,10 +311,39 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
     return report
 
 
+_YANDEX_EXTRACTOR_VERSION = 2
+
 _YANDEX_CACHE_SCHEMA = """CREATE TABLE IF NOT EXISTS yandex_maps_cache (
   cache_key TEXT PRIMARY KEY, lat REAL, lon REAL, title TEXT, subtitle TEXT,
   url TEXT, is_house INTEGER, found INTEGER NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"""
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  extractor_version INTEGER NOT NULL DEFAULT 0);"""
+
+
+def _ensure_yandex_cache_schema(store) -> None:
+    """Create the current raw-cache schema and add versioning to older schemas.
+
+    A missing version is deliberately migrated as 0. Existing successful rows
+    then remain available for diagnostics, but are refreshed before reuse.
+    """
+    con = store.con
+    # Storage may already have committed user changes before this lookup. Match
+    # the old executescript boundary, then serialize first-time DDL and inspect
+    # the schema only after acquiring SQLite's write reservation.
+    if con.in_transaction:
+        con.commit()
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        con.execute(_YANDEX_CACHE_SCHEMA)
+        columns = {row[1] for row in con.execute("PRAGMA table_info(yandex_maps_cache)")}
+        if "extractor_version" not in columns:
+            con.execute(
+                "ALTER TABLE yandex_maps_cache ADD COLUMN extractor_version INTEGER NOT NULL DEFAULT 0"
+            )
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
 
 
 def _yandex_query(raw: str) -> str:
@@ -298,14 +359,16 @@ def _yandex_query(raw: str) -> str:
 def _yandex_lookup_cached(c, store, jobs, retry_misses=False):
     """jobs: [(key, query, (near_lat, near_lon))] -> {key: YResult|None}. Кэш в SQLite."""
     from . import yandex_maps as ym
-    store.con.executescript(_YANDEX_CACHE_SCHEMA)
+    _ensure_yandex_cache_schema(store)
     result, todo = {}, []
     for key, query, near in jobs:
         ck = " ".join(query.lower().replace("ё", "е").split())
         row = store.con.execute(
-            "SELECT lat,lon,title,subtitle,url,is_house,found FROM yandex_maps_cache WHERE cache_key=?",
+            "SELECT lat,lon,title,subtitle,url,is_house,found,extractor_version "
+            "FROM yandex_maps_cache WHERE cache_key=?",
             (ck,)).fetchone()
-        if row is None or (retry_misses and not row[6]):
+        if (row is None or row[7] != _YANDEX_EXTRACTOR_VERSION
+                or (retry_misses and not row[6])):
             todo.append((key, query, near, ck))
         elif not row[6]:
             result[key] = None
@@ -317,15 +380,17 @@ def _yandex_lookup_cached(c, store, jobs, retry_misses=False):
             r = fresh.get(key)
             if r is None:
                 store.con.execute(
-                    "INSERT INTO yandex_maps_cache(cache_key,found) VALUES(?,0) "
-                    "ON CONFLICT(cache_key) DO UPDATE SET found=0, updated_at=CURRENT_TIMESTAMP", (ck,))
+                    "INSERT INTO yandex_maps_cache(cache_key,found,extractor_version) VALUES(?,0,?) "
+                    "ON CONFLICT(cache_key) DO UPDATE SET found=0,extractor_version=excluded.extractor_version,"
+                    "updated_at=CURRENT_TIMESTAMP", (ck, _YANDEX_EXTRACTOR_VERSION))
             else:
                 store.con.execute(
-                    "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found) "
-                    "VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(cache_key) DO UPDATE SET lat=excluded.lat,"
+                    "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found,extractor_version) "
+                    "VALUES(?,?,?,?,?,?,?,1,?) ON CONFLICT(cache_key) DO UPDATE SET lat=excluded.lat,"
                     "lon=excluded.lon,title=excluded.title,subtitle=excluded.subtitle,url=excluded.url,"
-                    "is_house=excluded.is_house,found=1,updated_at=CURRENT_TIMESTAMP",
-                    (ck, r.lat, r.lon, r.title, r.subtitle, r.url, int(r.is_house)))
+                    "is_house=excluded.is_house,found=1,extractor_version=excluded.extractor_version,"
+                    "updated_at=CURRENT_TIMESTAMP",
+                    (ck, r.lat, r.lon, r.title, r.subtitle, r.url, int(r.is_house), _YANDEX_EXTRACTOR_VERSION))
             result[key] = r
         store.con.commit()
     return result
@@ -408,8 +473,8 @@ def cmd_plan(args):
     c = Config()
     store = Storage(c.db_path)
     stops = read_table(args.xlsx, c.default_service_min)
-    report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence)
     g = get_geocoder(c)
+    report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence, geocoder=g)
     d = depot(c, g)
 
     coords = [(d.lat,d.lon)] + [(s.geo.lat,s.geo.lon) for s in stops]
@@ -431,11 +496,15 @@ def cmd_plan(args):
     route_coords = [(d.lat,d.lon)] + [(s.geo.lat,s.geo.lon) for s in ordered_stops]
     if args.end == "depot":
         route_coords.append((d.lat,d.lon))
-    geometry = router.geometry(route_coords)
+    geometry, geometry_warning = route_geometry(router, route_coords)
 
     text = itinerary_text(args.date, stops, sol, d.normalized_address, minutes(args.depart), args.end)
+    text = _append_route_warning(text, geometry_warning)
     (out/"itinerary.txt").write_text(text, encoding="utf-8")
-    (out/"route.json").write_text(json.dumps(route_json(stops,sol,geometry), ensure_ascii=False, indent=2), encoding="utf-8")
+    route_data = route_json(stops, sol, geometry)
+    if geometry_warning:
+        route_data["warnings"].append(geometry_warning)
+    (out/"route.json").write_text(json.dumps(route_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     markers = [(s.geo.lat,s.geo.lon,s.operation.value) for s in ordered_stops]
     render_map(out/"route.png", (d.lat,d.lon), markers, geometry, c.tile_url, c.tile_user_agent)
@@ -519,7 +588,7 @@ def recompute_route(c: Config, folder: Path, order_rows: list[int],
     leg_dist = [distances[k][k + 1] for k in range(n)]
     return_leg = (durations[n][n + 1], distances[n][n + 1]) if end_mode == "depot" else None
     sol = sequence_route(ordered, leg_dur, leg_dist, depart_min, end_mode, return_leg)
-    geometry = router.geometry(pts)
+    geometry, geometry_warning = route_geometry(router, pts)
 
     if not (folder / "route.original.json").exists():
         for name in ("route.json", "itinerary.txt", "route.png"):
@@ -529,8 +598,11 @@ def recompute_route(c: Config, folder: Path, order_rows: list[int],
                 (folder / f"{stem}.original{suffix}").write_bytes(src.read_bytes())
 
     text = itinerary_text(meta.get("date", ""), ordered, sol, d.normalized_address, depart_min, end_mode)
+    text = _append_route_warning(text, geometry_warning)
     (folder / "itinerary.txt").write_text(text, encoding="utf-8")
     rj = route_json(ordered, sol, geometry)
+    if geometry_warning:
+        rj["warnings"].append(geometry_warning)
     rj["manually_edited"] = True
     for visit in rj.get("visits", []):
         src_row = visit["stop"].get("source_row")
@@ -555,9 +627,42 @@ def restore_route(folder: Path) -> bool:
     return True
 
 
+def cmd_dictionary(args):
+    from . import fns_update
+    from .geocode import normalize_address_input
+    directory = args.root if args.root is not None else Config().address_dictionary_dir
+    if not directory:
+        raise ValueError("Задайте ADDRESS_DICTIONARY_DIR или --root")
+    root = Path(directory)
+    if args.dictionary_action == "update":
+        result = fns_update.update(root, source=args.archive, version=args.version)
+    elif args.dictionary_action == "rollback":
+        result = fns_update.rollback(root)
+    elif args.dictionary_action == "normalize":
+        snapshot = AddressDictionary.open_current(root)
+        if snapshot is None:
+            raise ValueError("Справочник ещё не загружен: dictionary update")
+        result = snapshot.normalize(normalize_address_input(args.address)).as_dict()
+    else:
+        result = fns_update.status(root)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="courier-route")
     sub = p.add_subparsers(dest="cmd", required=True)
+    dictionary = sub.add_parser("dictionary", help="Адресный справочник ФНС: загрузка, статус, откат")
+    actions = dictionary.add_subparsers(dest="dictionary_action", required=True)
+    for action in ("update", "status", "rollback", "normalize"):
+        command = actions.add_parser(action)
+        command.add_argument("--root", help="Каталог версий (по умолчанию ADDRESS_DICTIONARY_DIR)")
+        command.set_defaults(func=cmd_dictionary)
+        if action == "update":
+            command.add_argument("--archive", help="Локальная полная выгрузка ГАР ZIP вместо сети")
+            command.add_argument("--version", help="Версия локальной выгрузки")
+        elif action == "normalize":
+            command.add_argument("address")
     d = sub.add_parser("doctor", help="Проверить окружение")
     d.set_defaults(func=cmd_doctor)
     gd = sub.add_parser("geocode-depot", help="Геокодировать фиксированную базу")

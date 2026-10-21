@@ -532,6 +532,17 @@ h3 {
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.route-warning {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 12px;
+  background: var(--warn-soft);
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .build-overlay[hidden] {
   display: none;
 }
@@ -2012,9 +2023,7 @@ def _build_error(error: str) -> str:
 def _login_page(error: str = "") -> str:
     err = _plain_error(error)
     body = f"""<div class="login card">
-<span class="login-badge">Доступ через VPN</span>
 <h1>Courier Router</h1>
-<p class="lead">Закрытый планировщик маршрутов доставки.</p>
 {err}
 <form method="post" action="/login">
   <div class="field">
@@ -2334,6 +2343,10 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
         if review_count else '<span class="status-chip ok">✓ координаты без пометок</span>'
     )
     done_status = f'<span class="status-chip ok">✓ {done_count} выполнено</span>' if done_count else ""
+    route_warnings_html = "".join(
+        f'<div class="route-warning" role="status">⚠ {html.escape(str(warning))}</div>'
+        for warning in route.get("warnings", []) if warning
+    )
     manually_edited = bool(route.get("manually_edited"))
     reset_menu = (
         f'<form method="post" action="/routes/{run_id}/reset" onsubmit="return confirm(\'Вернуть маршрут к автоматическому расчёту?\')">'
@@ -2377,6 +2390,7 @@ def _route_page(user: str, run_id: str, meta: dict, route: dict) -> str:
     </details>
   </div>
   {edited_badge}
+  {route_warnings_html}
   <p class="edit-hint muted">Точку можно поправить: нажмите её номер, чтобы переставить, или ✎ — чтобы сдвинуть на карте или убрать.</p>
   <div class="metric-grid">
     <div class="metric"><span class="metric-label">Пробег</span><strong class="metric-value">{km:.1f} км</strong></div>

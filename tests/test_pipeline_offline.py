@@ -128,3 +128,26 @@ def test_report_has_no_low_confidence_warnings(tmp_path, stubbed):
     cli.cmd_plan(_args(Path("data/input/sample.xlsx"), out))
     report = json.loads((out / "geocoding-report.json").read_text("utf-8"))
     assert all(r["confidence"] >= 0.80 for r in report)
+
+
+def test_dictionary_rotation_during_plan_keeps_depot_and_stops_on_same_version(
+        tmp_path, stubbed, dictionary_root, gar_factory, monkeypatch):
+    from courier_router.address_dictionary import AddressDictionary
+    from courier_router.fns_update import update
+    versions = []
+    class VersionedGeocoder(StubGeocoder):
+        def __init__(self):
+            self.dictionary = AddressDictionary.open_current(dictionary_root)
+        def geocode(self, address, district=""):
+            versions.append(self.dictionary.version)
+            if len(versions) == 1:
+                update(dictionary_root, source=gar_factory("20261021"), version="20261021", min_streets=1)
+            return super().geocode(address, district)
+    monkeypatch.setattr(cli, "get_geocoder", lambda c: VersionedGeocoder())
+    config = cli.Config()
+    config.depot_lat = config.depot_lon = ""
+    monkeypatch.setattr(cli, "Config", lambda: config)
+    cli.cmd_plan(_args(Path("data/input/sample.xlsx"), tmp_path / "run"))
+    assert len(versions) == 5  # Four stops and the depot were all geocoded.
+    assert set(versions) == {"20261020"}
+    assert AddressDictionary.open_current(dictionary_root).version == "20261021"

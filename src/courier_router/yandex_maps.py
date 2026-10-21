@@ -9,9 +9,11 @@ item is chosen by street name + house number from the query — not the first ro
 from __future__ import annotations
 
 import os
+import math
 import re
 import urllib.parse
 from dataclasses import dataclass
+from .address_dictionary import street_conflict
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.expanduser("~/.cache/ms-playwright"))
 
@@ -24,8 +26,9 @@ _SUB_SEL = ("[class*='card-title-view__subtitle'], "
             "[class*='toponym-card-title-view__subtitle']")
 _SNIPPET_SEL = ("[class*='search-snippet-view'], [class*='search-business-snippet-view'], "
                 "li[class*='search-snippet']")
-_GENERIC = {"улица", "ул", "проспект", "пр", "пркт", "пр-кт", "переулок", "пер",
+_GENERIC = {"улица", "ул", "проспект", "пр", "пр-т", "пркт", "пр-кт", "переулок", "пер",
             "шоссе", "ш", "набережная", "наб", "бульвар", "б-р", "линия", "проезд",
+            "пл", "площадь",
             "дом", "д", "литера", "лит", "корпус", "корп", "к", "строение", "стр",
             "деревня", "дер", "поселок", "посёлок", "пос", "село", "снт", "тер",
             "территория", "область", "обл", "район", "р-н", "городское", "поселение"}
@@ -50,22 +53,69 @@ def _norm(s: str) -> str:
     return " ".join(re.sub(r"[^0-9a-zа-яё]+", " ", s.replace("ё", "е")).split())
 
 
-_MARK = (r"ул|улица|пр|пр-?кт|проспект|пер|переулок|ш|шоссе|наб|набережная|"
+_MARK = (r"ул|улица|пр-т|пр|пр-?кт|проспект|пл|площадь|пер|переулок|ш|шоссе|наб|набережная|"
          r"б-р|бульвар|линия|проезд|аллея|туп|тупик")
 _STREET_AFTER = re.compile(rf"(?:^|,)\s*(?:{_MARK})\.?\s+([^,]+)", re.I)
+_STREET_AFTER_ANY = re.compile(rf"(?<!\w)(?P<marker>{_MARK})\.?\s+(?P<name>[^,]+)", re.I)
 _STREET_BEFORE = re.compile(rf"(?:^|,)\s*([^,]+?)\s+(?:{_MARK})\b", re.I)
 
 
-def _street_tokens(s: str) -> set[str]:
-    m = _STREET_AFTER.search(s or "") or _STREET_BEFORE.search(s or "")
-    part = m.group(1) if m else (s or "")
-    # In "1-я линия Васильевского острова" the name continues after "линия".
-    if m and re.search(r"\bлиния\b", m.group(0), re.I):
-        part += " " + (s or "")[m.end():].split(",", 1)[0]
+def _clean_street_part(part: str) -> set[str]:
+    # Building letters may contain more than one character (for example, "литера
+    # ПЛА"). Remove the complete suffix before tokenizing the remaining street.
+    part = re.sub(r"\bлит(?:ера)?(?=\.|\s|№)\.?\s*№?\s*[0-9а-яa-z]+\b", " ", part, flags=re.I)
     part = re.sub(r"\b(?:д|дом|кв|литера?|корп(?:ус)?|стр(?:оение)?)\.?\s*(?:[0-9]+[а-яa-z/]*|[а-яa-z]\b)",
                   " ", part, flags=re.I)
     return {t for t in _norm(part).split() if t not in _GENERIC and not t.isdigit()
             and (len(t) >= 3 or re.fullmatch(r"\d+[а-яa-z]+", t))}
+
+
+def _street_tokens(s: str) -> set[str]:
+    s = s or ""
+    # Prefer the explicit prefix form. It can follow a city without a comma,
+    # as in "Ломоносов ул Красного Флота". If that marker is actually a suffix
+    # ("Театральная площадь д 16"), its remainder has no street-name tokens and
+    # the suffix parser below gets the address instead.
+    m = _STREET_AFTER.search(s)
+    if m:
+        part = m.group(1)
+        return _clean_street_part(part)
+
+    middle = _STREET_AFTER_ANY.search(s)
+    if middle:
+        part = middle.group("name")
+        if middle.group("marker").lower() == "линия":
+            ordinal = re.search(r"(?<!\w)(\d+[- ]?[а-я])\s*$", s[:middle.start()], re.I)
+            if ordinal:
+                part = ordinal.group(1) + " " + part
+        tokens = _clean_street_part(part)
+        if tokens:
+            return tokens
+
+    m = _STREET_BEFORE.search(s)
+    if not m:
+        return _clean_street_part(s)
+    part = m.group(1)
+    # In "1-я линия Васильевского острова" the name continues after "линия".
+    if re.search(r"\bлиния\b", m.group(0), re.I):
+        part += " " + s[m.end():].split(",", 1)[0]
+    return _clean_street_part(part)
+
+
+def _prefix_locality_before_street(s: str) -> str:
+    """Return a locality preceding an uncommaed prefix street marker, if clear."""
+    s = s or ""
+    middle = _STREET_AFTER_ANY.search(s)
+    if not middle or not _clean_street_part(middle.group("name")):
+        return ""
+    # Only inspect the text immediately before the street marker. Earlier comma
+    # components may be a region or territory and have their own review rules.
+    prefix = s[:middle.start()].rsplit(",", 1)[-1].strip()
+    if not prefix:
+        return ""
+    if middle.group("marker").lower() == "линия":
+        prefix = re.sub(r"(?:^|\s)\d+[- ]?[а-я]\s*$", "", prefix, flags=re.I)
+    return prefix
 
 
 def _house_num(s: str) -> str | None:
@@ -83,6 +133,8 @@ def _house_num(s: str) -> str | None:
 
 
 def _match_score(query: str, title: str, subtitle: str) -> float:
+    if street_conflict(query, title):
+        return -1.0
     q_streets = _street_tokens(query)
     hay = _norm(f"{title} {subtitle}")
     hay_set = set(hay.split())
@@ -103,11 +155,13 @@ def _coords_from_card(page) -> tuple[float, float] | None:
         el = page.wait_for_selector(_COORD_SEL, timeout=8000)
         m = re.search(r"(-?\d{1,2}\.\d{3,}),\s*(-?\d{1,3}\.\d{3,})", el.inner_text())
         if m:
-            return float(m.group(1)), float(m.group(2))   # Яндекс печатает lat, lon
+            lat, lon = float(m.group(1)), float(m.group(2))
+            if math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180:
+                return lat, lon  # Яндекс печатает lat, lon
     except Exception:
         pass
-    m = re.search(r'"coordinates"\s*:\s*\[\s*(3[01]\.\d{3,})\s*,\s*(6[01]\.\d{3,})\s*\]', page.content())
-    return (float(m.group(2)), float(m.group(1))) if m else None
+    # Coordinates elsewhere in the HTML may belong to the map centre or another result.
+    return None
 
 
 def _card_text(page):
@@ -132,14 +186,14 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
     url = (f"https://yandex.ru/maps/?ll={lon0}%2C{lat0}&z=15&mode=search&text="
            + urllib.parse.quote(address))
     page.goto(url, wait_until="domcontentloaded", timeout=40000)
-    page.wait_for_timeout(2500)
+    page.wait_for_selector(f"{_TITLE_SEL}, {_SNIPPET_SEL}", state="visible", timeout=15000)
 
     # 1) Яндекс сразу открыл карточку одного дома
     if "/house/" in page.url or "/geo/" in page.url:
         coords = _coords_from_card(page)
         if coords:
             t, sub = _card_text(page)
-            return YResult(coords[0], coords[1], t, sub, page.url, True)
+            return YResult(coords[0], coords[1], t, sub, page.url, _house_num(t) is not None)
 
     # 2) список кандидатов — выбираем по совпадению улицы и номера дома
     try:
@@ -149,7 +203,7 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
     scored = []
     for sn in snippets[:12]:
         try:
-            txt = " ".join(sn.inner_text().split())
+            txt = sn.inner_text().strip()
         except Exception:
             continue
         if not txt:
@@ -164,20 +218,20 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
         _, title, subtitle, sn = scored[0]
         try:
             sn.click(timeout=4000)
-            page.wait_for_timeout(2200)
+            page.wait_for_selector(_COORD_SEL, state="visible", timeout=15000)
         except Exception:
-            pass
+            return None
         coords = _coords_from_card(page)
         if coords:
             ct, csub = _card_text(page)
-            is_house = ("/house/" in page.url) or ("/geo/" in page.url) or (_house_num(ct or title) is not None)
+            is_house = (("/house/" in page.url) or ("/geo/" in page.url)) and _house_num(ct) is not None
             return YResult(coords[0], coords[1], ct or title, csub or subtitle, page.url, is_house)
 
-    # 3) как было: первый попавшийся coordinates на странице (низкое доверие)
+    # 3) Only a visible card can provide coordinates; unknown precision requires review.
     coords = _coords_from_card(page)
     if coords:
         t, sub = _card_text(page)
-        is_house = ("/house/" in page.url) or ("/geo/" in page.url)
+        is_house = (("/house/" in page.url) or ("/geo/" in page.url)) and _house_num(t) is not None
         return YResult(coords[0], coords[1], t, sub, page.url, is_house)
     return None
 

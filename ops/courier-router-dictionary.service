@@ -1,0 +1,17 @@
+[Unit]
+Description=Update the Courier Router FNS street dictionary
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=toligrim
+Group=toligrim
+WorkingDirectory=/home/toligrim/projects/CargoRoute/courier-router
+EnvironmentFile=/home/toligrim/projects/CargoRoute/courier-router/.env
+ExecStart=/home/toligrim/projects/CargoRoute/courier-router/.venv/bin/courier-route dictionary update
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=true

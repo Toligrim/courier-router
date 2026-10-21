@@ -7,8 +7,9 @@ from difflib import SequenceMatcher
 import httpx
 
 from .domain import GeoPoint
+from .address_dictionary import NORMALIZER_VERSION, Normalization, street_conflict
 
-RESOLVER_VERSION = 2
+RESOLVER_VERSION = 5
 
 QC_CONF = {
     0: ("exact", 0.99),
@@ -22,6 +23,7 @@ QC_CONF = {
 GENERIC_STREET_WORDS = {
     "ул", "улица", "пр", "просп", "проспект", "пр-кт", "переулок", "пер",
     "наб", "набережная", "ш", "шоссе", "б-р", "бульвар", "проезд", "дорога",
+    "пр-т", "пл", "площадь",
 }
 
 
@@ -64,14 +66,47 @@ def strip_apartment(address: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip(" ,;")
 
 
+def _normalize_street_shorthands(text: str) -> str:
+    """Expand street type abbreviations before the first house/building suffix."""
+    suffix = re.search(
+        r"(?<!\w)(?:(?:д|дом|к|корп|корпус|стр|строение)\.?\s*№?\s*\d+|"
+        r"(?:лит|литера)(?=\.|\s|№)\.?\s*№?\s*[а-яa-z0-9])",
+        text, re.I,
+    )
+    street = text[:suffix.start()] if suffix else text
+    rest = text[suffix.start():] if suffix else ""
+    street = re.sub(r"\bпр\s*-\s*т\b\.?", "проспект", street, flags=re.I)
+    street = re.sub(r"\bпл\b\.?", "площадь", street, flags=re.I)
+    return street + rest
+
+
 def normalize_address_input(address: str, district: str = "") -> str:
     """Conservative cleanup for courier spreadsheets before external geocoding."""
     text = " ".join((address or "").strip().split())
     text = strip_apartment(text)
+    # Courier sheets sometimes put spaces around the hyphen. Canonicalize the
+    # city name before locality detection so the courier district is not prepended.
+    text = re.sub(r"\bсанкт\s*-\s*петербург\b", "Санкт-Петербург", text, flags=re.I)
     text = re.sub(r"^\s*(?:спб|спб\.|пб)\s*[,;]?\s*", "Санкт-Петербург, ", text, flags=re.I)
-    text = re.sub(r"^\s*ло\s*[,;]?\s*", "Ленинградская область, ", text, flags=re.I)
+    # LO is a region abbreviation only as a complete word: Ломоносов must stay intact.
+    text = re.sub(r"^\s*ло\b\s*[,;]?\s*", "Ленинградская область, ", text, flags=re.I)
     text = re.sub(r"\bкоменданск(ий|ого|ому|им|ом)\b", r"Комендантск\1", text, flags=re.I)
+    # Normalize only established street markers; preserve house/building suffixes
+    # such as the literal "ПЛ" after "литера".
+    text = _normalize_street_shorthands(text)
     text = re.sub(r"\s*[,;]+\s*", ", ", text)
+    # Route sheets abbreviate a street's type ("лн") and the island ("В.О.").
+    # Expand before both lookup and component validation, so the street is not
+    # mistaken for an unrecognised locality. Keep the original delivery address.
+    text = re.sub(r"\bлн\.?(?=\s|,|$)", "линия", text, flags=re.I)
+    parts = text.split(",")
+    for index, part in enumerate(parts):
+        if re.search(r"\bлиния\b", part, re.I):
+            parts[index] = re.sub(
+                r"\b(?:в\s*\.\s*о\.?|во)(?=\s|$)",
+                "Васильевского острова", part, flags=re.I,
+            )
+    text = ",".join(parts)
     text = re.sub(r",\s*,+", ", ", text)
     text = text.strip(" ,")
     # Колонка "район" в курьерских таблицах — это зона курьера, а не всегда реальный
@@ -82,7 +117,15 @@ def normalize_address_input(address: str, district: str = "") -> str:
         r"санкт-?петербург|ленинградск|\bгород\b|\bг\.?\s|\bдеревня\b|\bсел[оа]\b|\bпос[её]лок\b|\bпгт\b|\bдер\.?\s|\bпос\.?\s",
         text, re.I,
     )
-    if district and not has_locality and _norm_text(district) not in _norm_text(text):
+    # Some route rows put a locality directly before an explicit street marker
+    # without a comma ("Ломоносов ул Красного Флота"). Preserve that locality
+    # instead of prepending the courier's zone as if it were the settlement.
+    # Use the same parser as Yandex validation: suffix street forms such as
+    # "Петергофское шоссе д 16" have no street name after the marker and do not
+    # establish that the locality is present.
+    from . import yandex_maps as ym
+    has_prefix_locality = bool(ym._prefix_locality_before_street(text))
+    if district and not has_locality and not has_prefix_locality and _norm_text(district) not in _norm_text(text):
         text = f"{district}, {text}"
     return text
 
@@ -165,7 +208,8 @@ def _street_tokens(value: str | None) -> set[str]:
 
 
 def _has_street_marker(source: str) -> bool:
-    return bool(re.search(r"(?:^|[ ,])(?:ул|улица|пр-?кт|проспект|наб|набережная|ш|шоссе|пер|переулок)\.?\s", source, re.I))
+    marker = r"(?:ул|улица|пр-?кт|пр-т|проспект|пл|площадь|наб|набережная|ш|шоссе|пер|переулок)"
+    return bool(re.search(rf"(?:^|[ ,]){marker}\.?(?=\s|$)|\s{marker}\.?(?:$|[ ,])", source, re.I))
 
 
 def _candidate_locality(data: dict) -> str:
@@ -226,7 +270,10 @@ def _score_locality(source: str, data: dict) -> tuple[float, list[str], bool]:
     )
     if m:
         named = _norm_text(m.group(1)).strip()
-        named = re.split(r"\s+(?:ул|улица|пр|проспект|наб|ш|шоссе|пер|переулок|б-р|линия)\b", named, maxsplit=1)[0].strip()
+        named = re.split(
+            r"\s+(?:ул|улица|пр|пр-т|пр-кт|проспект|пл|площадь|наб|набережная|ш|шоссе|пер|переулок|б-р|линия)\b",
+            named, maxsplit=1,
+        )[0].strip()
         if named and "санкт петербург" not in named:
             if named in locality:
                 score += 0.15
@@ -477,14 +524,25 @@ class DaDataGeocoder:
 class YandexMapsGeocoder:
     """Primary geocoder using the same Yandex Maps lookup as the cross-check."""
 
-    def __init__(self):
+    def __init__(self, dictionary=None):
         from . import yandex_maps as ym
         self.lookup = ym.lookup_batch
         self._results = {}
+        self.dictionary = dictionary
+        self.dictionary_version = dictionary.version if dictionary else None
+        self._normalizations = {}
 
-    @staticmethod
-    def query(address: str, district: str = "") -> str:
-        return re.sub(r"^\s*г\s+", "", normalize_address_input(address, district))
+    def normalization(self, address: str) -> Normalization:
+        if address not in self._normalizations:
+            prepared = normalize_address_input(address)
+            self._normalizations[address] = (self.dictionary.normalize(prepared) if self.dictionary
+                                             else Normalization(prepared, prepared, status="unavailable"))
+        return self._normalizations[address]
+
+    def query(self, address: str, district: str = "") -> str:
+        # Courier zones must not narrow the dictionary's geographical scope.
+        normalized = self.normalization(address).query
+        return re.sub(r"^\s*г\s+", "", normalize_address_input(normalized, district))
 
     def prefetch(self, addresses) -> None:
         queries = dict.fromkeys(self.query(address, district) for address, district in addresses)
@@ -503,7 +561,7 @@ class YandexMapsGeocoder:
         score = ym._match_score(query, y.title, y.subtitle)
         house = ym._house_num(query)
         found_house = ym._house_num(y.title) or ym._house_num(y.subtitle)
-        mismatch = score < 0.55 or (
+        mismatch = street_conflict(query, y.title) or score < 0.55 or (
             house is not None and found_house is not None
             and house != found_house and not _same_house_number(house, found_house)
         )
@@ -523,7 +581,17 @@ class YandexMapsGeocoder:
         # district column. Several towns in the region share street/house names.
         hay = set(ym._norm(f"{y.title} {y.subtitle}").split())
         street_seen = False
-        for part in normalize_address_input(address).split(","):
+        # Check the user's locality before the courier-zone column is added to
+        # the outbound search query.
+        locality_query = self.normalization(address).query
+        prefix_locality = ym._prefix_locality_before_street(locality_query)
+        if prefix_locality:
+            locality_words = set(ym._norm(prefix_locality).split()) - ym._GENERIC - {
+                "г", "город", "д", "россия", "рф",
+            }
+            if locality_words - hay:
+                mismatch = True
+        for part in self.normalization(address).query.split(","):
             explicit_locality = re.match(
                 r"\s*(?:г|город|деревня|дер|пос[её]лок|пос|село|д)\.?\s+[а-яa-z]", part, re.I,
             )
@@ -551,6 +619,9 @@ class YandexMapsGeocoder:
             confidence=0.95 if confirmed else 0.65, provider_ref=y.url,
             raw={"_resolver": {
                 "version": RESOLVER_VERSION,
+                "dictionary_version": self.dictionary_version,
+                "normalizer_version": NORMALIZER_VERSION,
+                "normalization": self.normalization(address).as_dict(),
                 "status": "strong_mismatch" if mismatch else "verified" if confirmed else "review",
                 "source": "yandex_maps", "primary": True, "query": query, "score": score,
                 "yandex_title": y.title, "yandex_subtitle": y.subtitle,
