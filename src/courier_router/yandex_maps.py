@@ -9,9 +9,11 @@ item is chosen by street name + house number from the query — not the first ro
 from __future__ import annotations
 
 import os
+import math
 import re
 import urllib.parse
 from dataclasses import dataclass
+from .address_dictionary import street_conflict
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.expanduser("~/.cache/ms-playwright"))
 
@@ -83,6 +85,8 @@ def _house_num(s: str) -> str | None:
 
 
 def _match_score(query: str, title: str, subtitle: str) -> float:
+    if street_conflict(query, title):
+        return -1.0
     q_streets = _street_tokens(query)
     hay = _norm(f"{title} {subtitle}")
     hay_set = set(hay.split())
@@ -103,11 +107,13 @@ def _coords_from_card(page) -> tuple[float, float] | None:
         el = page.wait_for_selector(_COORD_SEL, timeout=8000)
         m = re.search(r"(-?\d{1,2}\.\d{3,}),\s*(-?\d{1,3}\.\d{3,})", el.inner_text())
         if m:
-            return float(m.group(1)), float(m.group(2))   # Яндекс печатает lat, lon
+            lat, lon = float(m.group(1)), float(m.group(2))
+            if math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180:
+                return lat, lon  # Яндекс печатает lat, lon
     except Exception:
         pass
-    m = re.search(r'"coordinates"\s*:\s*\[\s*(3[01]\.\d{3,})\s*,\s*(6[01]\.\d{3,})\s*\]', page.content())
-    return (float(m.group(2)), float(m.group(1))) if m else None
+    # Coordinates elsewhere in the HTML may belong to the map centre or another result.
+    return None
 
 
 def _card_text(page):
@@ -132,14 +138,14 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
     url = (f"https://yandex.ru/maps/?ll={lon0}%2C{lat0}&z=15&mode=search&text="
            + urllib.parse.quote(address))
     page.goto(url, wait_until="domcontentloaded", timeout=40000)
-    page.wait_for_timeout(2500)
+    page.wait_for_selector(f"{_TITLE_SEL}, {_SNIPPET_SEL}", state="visible", timeout=15000)
 
     # 1) Яндекс сразу открыл карточку одного дома
     if "/house/" in page.url or "/geo/" in page.url:
         coords = _coords_from_card(page)
         if coords:
             t, sub = _card_text(page)
-            return YResult(coords[0], coords[1], t, sub, page.url, True)
+            return YResult(coords[0], coords[1], t, sub, page.url, _house_num(t) is not None)
 
     # 2) список кандидатов — выбираем по совпадению улицы и номера дома
     try:
@@ -149,7 +155,7 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
     scored = []
     for sn in snippets[:12]:
         try:
-            txt = " ".join(sn.inner_text().split())
+            txt = sn.inner_text().strip()
         except Exception:
             continue
         if not txt:
@@ -164,20 +170,20 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
         _, title, subtitle, sn = scored[0]
         try:
             sn.click(timeout=4000)
-            page.wait_for_timeout(2200)
+            page.wait_for_selector(_COORD_SEL, state="visible", timeout=15000)
         except Exception:
-            pass
+            return None
         coords = _coords_from_card(page)
         if coords:
             ct, csub = _card_text(page)
-            is_house = ("/house/" in page.url) or ("/geo/" in page.url) or (_house_num(ct or title) is not None)
+            is_house = (("/house/" in page.url) or ("/geo/" in page.url)) and _house_num(ct) is not None
             return YResult(coords[0], coords[1], ct or title, csub or subtitle, page.url, is_house)
 
-    # 3) как было: первый попавшийся coordinates на странице (низкое доверие)
+    # 3) Only a visible card can provide coordinates; unknown precision requires review.
     coords = _coords_from_card(page)
     if coords:
         t, sub = _card_text(page)
-        is_house = ("/house/" in page.url) or ("/geo/" in page.url)
+        is_house = (("/house/" in page.url) or ("/geo/" in page.url)) and _house_num(t) is not None
         return YResult(coords[0], coords[1], t, sub, page.url, is_house)
     return None
 

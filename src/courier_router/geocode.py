@@ -7,8 +7,9 @@ from difflib import SequenceMatcher
 import httpx
 
 from .domain import GeoPoint
+from .address_dictionary import NORMALIZER_VERSION, Normalization, street_conflict
 
-RESOLVER_VERSION = 3
+RESOLVER_VERSION = 4
 
 QC_CONF = {
     0: ("exact", 0.99),
@@ -489,14 +490,25 @@ class DaDataGeocoder:
 class YandexMapsGeocoder:
     """Primary geocoder using the same Yandex Maps lookup as the cross-check."""
 
-    def __init__(self):
+    def __init__(self, dictionary=None):
         from . import yandex_maps as ym
         self.lookup = ym.lookup_batch
         self._results = {}
+        self.dictionary = dictionary
+        self.dictionary_version = dictionary.version if dictionary else None
+        self._normalizations = {}
 
-    @staticmethod
-    def query(address: str, district: str = "") -> str:
-        return re.sub(r"^\s*г\s+", "", normalize_address_input(address, district))
+    def normalization(self, address: str) -> Normalization:
+        if address not in self._normalizations:
+            prepared = normalize_address_input(address)
+            self._normalizations[address] = (self.dictionary.normalize(prepared) if self.dictionary
+                                             else Normalization(prepared, prepared, status="unavailable"))
+        return self._normalizations[address]
+
+    def query(self, address: str, district: str = "") -> str:
+        # Courier zones must not narrow the dictionary's geographical scope.
+        normalized = self.normalization(address).query
+        return re.sub(r"^\s*г\s+", "", normalize_address_input(normalized, district))
 
     def prefetch(self, addresses) -> None:
         queries = dict.fromkeys(self.query(address, district) for address, district in addresses)
@@ -515,7 +527,7 @@ class YandexMapsGeocoder:
         score = ym._match_score(query, y.title, y.subtitle)
         house = ym._house_num(query)
         found_house = ym._house_num(y.title) or ym._house_num(y.subtitle)
-        mismatch = score < 0.55 or (
+        mismatch = street_conflict(query, y.title) or score < 0.55 or (
             house is not None and found_house is not None
             and house != found_house and not _same_house_number(house, found_house)
         )
@@ -535,7 +547,7 @@ class YandexMapsGeocoder:
         # district column. Several towns in the region share street/house names.
         hay = set(ym._norm(f"{y.title} {y.subtitle}").split())
         street_seen = False
-        for part in normalize_address_input(address).split(","):
+        for part in self.normalization(address).query.split(","):
             explicit_locality = re.match(
                 r"\s*(?:г|город|деревня|дер|пос[её]лок|пос|село|д)\.?\s+[а-яa-z]", part, re.I,
             )
@@ -563,6 +575,9 @@ class YandexMapsGeocoder:
             confidence=0.95 if confirmed else 0.65, provider_ref=y.url,
             raw={"_resolver": {
                 "version": RESOLVER_VERSION,
+                "dictionary_version": self.dictionary_version,
+                "normalizer_version": NORMALIZER_VERSION,
+                "normalization": self.normalization(address).as_dict(),
                 "status": "strong_mismatch" if mismatch else "verified" if confirmed else "review",
                 "source": "yandex_maps", "primary": True, "query": query, "score": score,
                 "yandex_title": y.title, "yandex_subtitle": y.subtitle,

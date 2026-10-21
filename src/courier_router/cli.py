@@ -13,6 +13,7 @@ from .render import render_map
 from .report import itinerary_text, route_json
 from .routing import ORSRouter, OSRMRouter, RETRYABLE_ROUTING_STATUS
 from .storage import Storage
+from .address_dictionary import AddressDictionary, NORMALIZER_VERSION
 
 
 def minutes(s: str) -> int:
@@ -25,7 +26,9 @@ def minutes(s: str) -> int:
 
 def get_geocoder(c: Config):
     if c.geocoder == "yandex":
-        return YandexMapsGeocoder()
+        directory = getattr(c, "address_dictionary_dir", "")
+        dictionary = AddressDictionary.open_current(directory) if directory else None
+        return YandexMapsGeocoder(dictionary)
     if c.geocoder == "dadata":
         return DaDataGeocoder(c.dadata_token, c.dadata_secret, use_clean=c.dadata_use_clean)
     if c.geocoder == "nominatim":
@@ -170,14 +173,16 @@ def _clear_coord_flag(s, r: dict | None = None) -> None:
         r["requires_review"] = False
 
 
-def _cache_matches_geocoder(c, cached) -> bool:
+def _cache_matches_geocoder(c, cached, geocoder=None) -> bool:
     if not cached:
         return False
     provider = str(getattr(cached, "provider", ""))
     if c.geocoder == "yandex":
         resolver = _resolver_meta(cached)
         return (provider == "yandex_maps" and resolver.get("primary") is True
-                and resolver.get("version") == RESOLVER_VERSION)
+                and resolver.get("version") == RESOLVER_VERSION
+                and resolver.get("dictionary_version") == getattr(geocoder, "dictionary_version", None)
+                and resolver.get("normalizer_version") == NORMALIZER_VERSION)
     if c.geocoder == "dadata":
         resolver = _resolver_meta(cached)
         return provider in {"dadata_suggest", "dadata_clean"} and resolver.get("version") == RESOLVER_VERSION
@@ -193,8 +198,8 @@ def _forget_rejected_yandex(store, geo):
     store.con.commit()
 
 
-def geocode_stops(c, stops, store, allow_low_confidence=False):
-    g = get_geocoder(c)
+def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None):
+    g = geocoder if geocoder is not None else get_geocoder(c)
     report = []
     get_alias = getattr(store, "get_alias", None)
     if isinstance(g, YandexMapsGeocoder):
@@ -202,13 +207,13 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
         pending = [
             (s.address_raw, s.district) for s in stops
             if not (get_alias and get_alias(s.address_raw, s.district))
-            and not _cache_matches_geocoder(c, store.get_geocode(s.address_raw, s.district))
+            and not _cache_matches_geocoder(c, store.get_geocode(s.address_raw, s.district), g)
         ]
         g.prefetch(pending)
     for s in stops:
         alias = get_alias(s.address_raw, s.district) if get_alias else None
         cached = store.get_geocode(s.address_raw, s.district)
-        cache_valid = _cache_matches_geocoder(c, cached)
+        cache_valid = _cache_matches_geocoder(c, cached, g)
         if alias is not None:
             s.geo = alias
             source = "alias"
@@ -286,6 +291,8 @@ def geocode_stops(c, stops, store, allow_low_confidence=False):
             "outside_expected_area": outside_expected_area,
             "resolver_status": resolver_status,
             "resolver_version": resolver.get("version"),
+            "dictionary_version": resolver.get("dictionary_version"),
+            "normalization": resolver.get("normalization"),
             "resolver_score": resolver.get("score"),
             "resolver_reasons": resolver.get("reasons", []),
             "resolver_query": resolver.get("query"),
@@ -433,8 +440,8 @@ def cmd_plan(args):
     c = Config()
     store = Storage(c.db_path)
     stops = read_table(args.xlsx, c.default_service_min)
-    report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence)
     g = get_geocoder(c)
+    report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence, geocoder=g)
     d = depot(c, g)
 
     coords = [(d.lat,d.lon)] + [(s.geo.lat,s.geo.lon) for s in stops]
@@ -587,9 +594,42 @@ def restore_route(folder: Path) -> bool:
     return True
 
 
+def cmd_dictionary(args):
+    from . import fns_update
+    from .geocode import normalize_address_input
+    directory = args.root if args.root is not None else Config().address_dictionary_dir
+    if not directory:
+        raise ValueError("Задайте ADDRESS_DICTIONARY_DIR или --root")
+    root = Path(directory)
+    if args.dictionary_action == "update":
+        result = fns_update.update(root, source=args.archive, version=args.version)
+    elif args.dictionary_action == "rollback":
+        result = fns_update.rollback(root)
+    elif args.dictionary_action == "normalize":
+        snapshot = AddressDictionary.open_current(root)
+        if snapshot is None:
+            raise ValueError("Справочник ещё не загружен: dictionary update")
+        result = snapshot.normalize(normalize_address_input(args.address)).as_dict()
+    else:
+        result = fns_update.status(root)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="courier-route")
     sub = p.add_subparsers(dest="cmd", required=True)
+    dictionary = sub.add_parser("dictionary", help="Адресный справочник ФНС: загрузка, статус, откат")
+    actions = dictionary.add_subparsers(dest="dictionary_action", required=True)
+    for action in ("update", "status", "rollback", "normalize"):
+        command = actions.add_parser(action)
+        command.add_argument("--root", help="Каталог версий (по умолчанию ADDRESS_DICTIONARY_DIR)")
+        command.set_defaults(func=cmd_dictionary)
+        if action == "update":
+            command.add_argument("--archive", help="Локальная полная выгрузка ГАР ZIP вместо сети")
+            command.add_argument("--version", help="Версия локальной выгрузки")
+        elif action == "normalize":
+            command.add_argument("address")
     d = sub.add_parser("doctor", help="Проверить окружение")
     d.set_defaults(func=cmd_doctor)
     gd = sub.add_parser("geocode-depot", help="Геокодировать фиксированную базу")
