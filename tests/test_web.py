@@ -124,6 +124,8 @@ def test_delete_requires_login(monkeypatch, tmp_path):
 
 def test_login_page_is_mobile_friendly():
     page = web._login_page()
+    assert "Доступ через VPN" not in page
+    assert "Закрытый планировщик маршрутов доставки." not in page
     assert 'autocomplete="username"' in page
     assert 'autocomplete="current-password"' in page
     assert 'autocapitalize="none"' in page

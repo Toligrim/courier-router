@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse, json, os, platform, sys
 from pathlib import Path
+import httpx
 from .config import Config
 from .domain import GeoPoint, Operation, Payment, Stop, TimeWindow
 from .geocode import DaDataGeocoder, PublicNominatimGeocoder, YandexMapsGeocoder, RESOLVER_VERSION
@@ -10,7 +11,7 @@ from .parsing import normalize_phone, parse_window, read_table
 from .pdf_converter import convert_pdf_to_xlsx
 from .render import render_map
 from .report import itinerary_text, route_json
-from .routing import ORSRouter, OSRMRouter
+from .routing import ORSRouter, OSRMRouter, RETRYABLE_ROUTING_STATUS
 from .storage import Storage
 
 
@@ -58,6 +59,30 @@ def depot(c: Config, geocoder=None):
     if geocoder is None:
         geocoder = get_geocoder(c)
     return geocoder.geocode(c.depot_address, "")
+
+
+def route_geometry(router, coords):
+    """Fall back to point-to-point lines when a transient outage only affects
+    map geometry; the matrix-derived order, distance and ETA remain intact."""
+    try:
+        return router.geometry(coords), None
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status not in RETRYABLE_ROUTING_STATUS:
+            raise
+        detail = f"HTTP {status}"
+    except httpx.TransportError:
+        detail = "сетевая ошибка"
+
+    warning = (
+        f"Не удалось получить дорожную геометрию ({detail}); на карте показаны "
+        "прямые линии между точками. Порядок и ETA рассчитаны по дорожной матрице."
+    )
+    return list(coords), warning
+
+
+def _append_route_warning(text: str, warning: str | None) -> str:
+    return f"{text.rstrip()}\n\n⚠ {warning}\n" if warning else text
 
 
 def cmd_doctor(args):
@@ -431,11 +456,15 @@ def cmd_plan(args):
     route_coords = [(d.lat,d.lon)] + [(s.geo.lat,s.geo.lon) for s in ordered_stops]
     if args.end == "depot":
         route_coords.append((d.lat,d.lon))
-    geometry = router.geometry(route_coords)
+    geometry, geometry_warning = route_geometry(router, route_coords)
 
     text = itinerary_text(args.date, stops, sol, d.normalized_address, minutes(args.depart), args.end)
+    text = _append_route_warning(text, geometry_warning)
     (out/"itinerary.txt").write_text(text, encoding="utf-8")
-    (out/"route.json").write_text(json.dumps(route_json(stops,sol,geometry), ensure_ascii=False, indent=2), encoding="utf-8")
+    route_data = route_json(stops, sol, geometry)
+    if geometry_warning:
+        route_data["warnings"].append(geometry_warning)
+    (out/"route.json").write_text(json.dumps(route_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     markers = [(s.geo.lat,s.geo.lon,s.operation.value) for s in ordered_stops]
     render_map(out/"route.png", (d.lat,d.lon), markers, geometry, c.tile_url, c.tile_user_agent)
@@ -519,7 +548,7 @@ def recompute_route(c: Config, folder: Path, order_rows: list[int],
     leg_dist = [distances[k][k + 1] for k in range(n)]
     return_leg = (durations[n][n + 1], distances[n][n + 1]) if end_mode == "depot" else None
     sol = sequence_route(ordered, leg_dur, leg_dist, depart_min, end_mode, return_leg)
-    geometry = router.geometry(pts)
+    geometry, geometry_warning = route_geometry(router, pts)
 
     if not (folder / "route.original.json").exists():
         for name in ("route.json", "itinerary.txt", "route.png"):
@@ -529,8 +558,11 @@ def recompute_route(c: Config, folder: Path, order_rows: list[int],
                 (folder / f"{stem}.original{suffix}").write_bytes(src.read_bytes())
 
     text = itinerary_text(meta.get("date", ""), ordered, sol, d.normalized_address, depart_min, end_mode)
+    text = _append_route_warning(text, geometry_warning)
     (folder / "itinerary.txt").write_text(text, encoding="utf-8")
     rj = route_json(ordered, sol, geometry)
+    if geometry_warning:
+        rj["warnings"].append(geometry_warning)
     rj["manually_edited"] = True
     for visit in rj.get("visits", []):
         src_row = visit["stop"].get("source_row")

@@ -1,0 +1,4 @@
+# Ingress entry for the existing ledger-miniapp tunnel.
+# Keep this entry before the catch-all http_status:404 rule.
+- hostname: courier.kurva-cloud.ru
+  service: http://127.0.0.1:8100
