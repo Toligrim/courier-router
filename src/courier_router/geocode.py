@@ -8,7 +8,7 @@ import httpx
 
 from .domain import GeoPoint
 
-RESOLVER_VERSION = 2
+RESOLVER_VERSION = 3
 
 QC_CONF = {
     0: ("exact", 0.99),
@@ -72,6 +72,18 @@ def normalize_address_input(address: str, district: str = "") -> str:
     text = re.sub(r"^\s*ло\s*[,;]?\s*", "Ленинградская область, ", text, flags=re.I)
     text = re.sub(r"\bкоменданск(ий|ого|ому|им|ом)\b", r"Комендантск\1", text, flags=re.I)
     text = re.sub(r"\s*[,;]+\s*", ", ", text)
+    # Route sheets abbreviate a street's type ("лн") and the island ("В.О.").
+    # Expand before both lookup and component validation, so the street is not
+    # mistaken for an unrecognised locality. Keep the original delivery address.
+    text = re.sub(r"\bлн\.?(?=\s|,|$)", "линия", text, flags=re.I)
+    parts = text.split(",")
+    for index, part in enumerate(parts):
+        if re.search(r"\bлиния\b", part, re.I):
+            parts[index] = re.sub(
+                r"\b(?:в\s*\.\s*о\.?|во)(?=\s|$)",
+                "Васильевского острова", part, flags=re.I,
+            )
+    text = ",".join(parts)
     text = re.sub(r",\s*,+", ", ", text)
     text = text.strip(" ,")
     # Колонка "район" в курьерских таблицах — это зона курьера, а не всегда реальный

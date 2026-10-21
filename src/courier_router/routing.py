@@ -1,7 +1,9 @@
 from __future__ import annotations
+import time
 import httpx
 
 ORS_BASE_URL = "https://api.heigit.org/openrouteservice/v2"
+RETRYABLE_ROUTING_STATUS = {500, 502, 503, 504}
 
 
 class ORSRouter:
@@ -11,26 +13,40 @@ class ORSRouter:
         if not api_key:
             raise RuntimeError("Для ROUTER=ors нужен ORS_API_KEY")
         self.key = api_key
-        self.client = httpx.Client(timeout=timeout, headers={"Authorization": api_key})
+        self.client = httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=min(timeout, 10)),
+            headers={"Authorization": api_key},
+        )
+
+    def _post(self, url: str, payload: dict):
+        for attempt in range(3):
+            try:
+                response = self.client.post(url, json=payload)
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise
+            else:
+                if response.status_code not in RETRYABLE_ROUTING_STATUS or attempt == 2:
+                    response.raise_for_status()
+                    return response
+            time.sleep(0.5 * (2 ** attempt))
 
     def matrix(self, coords: list[tuple[float, float]]):
         # coords input lat,lon; ORS uses lon,lat
         locs = [[lon, lat] for lat, lon in coords]
-        r = self.client.post(
+        r = self._post(
             f"{ORS_BASE_URL}/matrix/driving-car",
-            json={"locations": locs, "metrics": ["duration", "distance"]},
+            {"locations": locs, "metrics": ["duration", "distance"]},
         )
-        r.raise_for_status()
         j = r.json()
         return j["durations"], j["distances"]
 
     def geometry(self, coords: list[tuple[float, float]]):
         locs = [[lon, lat] for lat, lon in coords]
-        r = self.client.post(
+        r = self._post(
             f"{ORS_BASE_URL}/directions/driving-car/geojson",
-            json={"coordinates": locs, "instructions": False},
+            {"coordinates": locs, "instructions": False},
         )
-        r.raise_for_status()
         j = r.json()
         line = j["features"][0]["geometry"]["coordinates"]
         return [(lat, lon) for lon, lat in line]

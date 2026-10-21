@@ -1,0 +1,28 @@
+tunnel: 3e76f95d-7a53-4940-a28a-2cb68907f680
+credentials-file: /home/toligrim/.cloudflared/3e76f95d-7a53-4940-a28a-2cb68907f680.json
+protocol: http2
+
+ingress:
+  - hostname: stt.kurva-cloud.ru
+    service: http://127.0.0.1:8096
+  - hostname: led.kurva-cloud.ru
+    service: http://127.0.0.1:8090
+  - hostname: docs.kurva-cloud.ru
+    service: http://127.0.0.1:8091
+  - hostname: driver.kurva-cloud.ru
+    service: http://127.0.0.1:8095
+  - hostname: research.kurva-cloud.ru
+    service: http://127.0.0.1:8000
+  - hostname: sec.kurva-cloud.ru
+    service: http://127.0.0.1:8080
+  - hostname: soc.kurva-cloud.ru
+    service: http://127.0.0.1:8383
+  - hostname: letopis-mcp.kurva-cloud.ru
+    service: http://127.0.0.1:8765
+    originRequest:
+      httpHostHeader: "127.0.0.1:8765"
+  - hostname: svmcp.kurva-cloud.ru
+    service: http://127.0.0.1:8099
+  - hostname: courier.kurva-cloud.ru
+    service: http://127.0.0.1:8100
+  - service: http_status:404

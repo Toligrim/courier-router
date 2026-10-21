@@ -1,0 +1,18 @@
+[Unit]
+Description=Courier Router Web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=toligrim
+Group=toligrim
+WorkingDirectory=/home/toligrim/projects/CargoRoute/courier-router
+EnvironmentFile=/home/toligrim/projects/CargoRoute/courier-router/.env
+ExecStart=/usr/bin/env WEB_HOST=127.0.0.1 WEB_PORT=8100 WEB_HTTPS_ONLY=1 /home/toligrim/projects/CargoRoute/courier-router/.venv/bin/courier-web serve --host 127.0.0.1 --port 8100
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

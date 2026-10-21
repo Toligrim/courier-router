@@ -34,6 +34,23 @@ def config():
     return SimpleNamespace(llm_provider="none", geocoder="stub")
 
 
+def test_configured_depot_skips_network_geocoder():
+    class FailingGeocoder:
+        def geocode(self, address, district):
+            raise AssertionError("configured depot must not call geocoder")
+
+    c = SimpleNamespace(
+        depot_lat="59.8491293",
+        depot_lon="30.2955126",
+        depot_address="ул Костюшко, д 2, Санкт-Петербург",
+    )
+
+    depot = cli.depot(c, FailingGeocoder())
+
+    assert (depot.lat, depot.lon) == (59.8491293, 30.2955126)
+    assert depot.provider == "config"
+
+
 def test_low_confidence_is_warning_not_failure(monkeypatch):
     geo = SimpleNamespace(
         lat=59.9,
