@@ -311,10 +311,39 @@ def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None)
     return report
 
 
+_YANDEX_EXTRACTOR_VERSION = 2
+
 _YANDEX_CACHE_SCHEMA = """CREATE TABLE IF NOT EXISTS yandex_maps_cache (
   cache_key TEXT PRIMARY KEY, lat REAL, lon REAL, title TEXT, subtitle TEXT,
   url TEXT, is_house INTEGER, found INTEGER NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"""
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  extractor_version INTEGER NOT NULL DEFAULT 0);"""
+
+
+def _ensure_yandex_cache_schema(store) -> None:
+    """Create the current raw-cache schema and add versioning to older schemas.
+
+    A missing version is deliberately migrated as 0. Existing successful rows
+    then remain available for diagnostics, but are refreshed before reuse.
+    """
+    con = store.con
+    # Storage may already have committed user changes before this lookup. Match
+    # the old executescript boundary, then serialize first-time DDL and inspect
+    # the schema only after acquiring SQLite's write reservation.
+    if con.in_transaction:
+        con.commit()
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        con.execute(_YANDEX_CACHE_SCHEMA)
+        columns = {row[1] for row in con.execute("PRAGMA table_info(yandex_maps_cache)")}
+        if "extractor_version" not in columns:
+            con.execute(
+                "ALTER TABLE yandex_maps_cache ADD COLUMN extractor_version INTEGER NOT NULL DEFAULT 0"
+            )
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
 
 
 def _yandex_query(raw: str) -> str:
@@ -330,14 +359,16 @@ def _yandex_query(raw: str) -> str:
 def _yandex_lookup_cached(c, store, jobs, retry_misses=False):
     """jobs: [(key, query, (near_lat, near_lon))] -> {key: YResult|None}. Кэш в SQLite."""
     from . import yandex_maps as ym
-    store.con.executescript(_YANDEX_CACHE_SCHEMA)
+    _ensure_yandex_cache_schema(store)
     result, todo = {}, []
     for key, query, near in jobs:
         ck = " ".join(query.lower().replace("ё", "е").split())
         row = store.con.execute(
-            "SELECT lat,lon,title,subtitle,url,is_house,found FROM yandex_maps_cache WHERE cache_key=?",
+            "SELECT lat,lon,title,subtitle,url,is_house,found,extractor_version "
+            "FROM yandex_maps_cache WHERE cache_key=?",
             (ck,)).fetchone()
-        if row is None or (retry_misses and not row[6]):
+        if (row is None or row[7] != _YANDEX_EXTRACTOR_VERSION
+                or (retry_misses and not row[6])):
             todo.append((key, query, near, ck))
         elif not row[6]:
             result[key] = None
@@ -349,15 +380,17 @@ def _yandex_lookup_cached(c, store, jobs, retry_misses=False):
             r = fresh.get(key)
             if r is None:
                 store.con.execute(
-                    "INSERT INTO yandex_maps_cache(cache_key,found) VALUES(?,0) "
-                    "ON CONFLICT(cache_key) DO UPDATE SET found=0, updated_at=CURRENT_TIMESTAMP", (ck,))
+                    "INSERT INTO yandex_maps_cache(cache_key,found,extractor_version) VALUES(?,0,?) "
+                    "ON CONFLICT(cache_key) DO UPDATE SET found=0,extractor_version=excluded.extractor_version,"
+                    "updated_at=CURRENT_TIMESTAMP", (ck, _YANDEX_EXTRACTOR_VERSION))
             else:
                 store.con.execute(
-                    "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found) "
-                    "VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(cache_key) DO UPDATE SET lat=excluded.lat,"
+                    "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found,extractor_version) "
+                    "VALUES(?,?,?,?,?,?,?,1,?) ON CONFLICT(cache_key) DO UPDATE SET lat=excluded.lat,"
                     "lon=excluded.lon,title=excluded.title,subtitle=excluded.subtitle,url=excluded.url,"
-                    "is_house=excluded.is_house,found=1,updated_at=CURRENT_TIMESTAMP",
-                    (ck, r.lat, r.lon, r.title, r.subtitle, r.url, int(r.is_house)))
+                    "is_house=excluded.is_house,found=1,extractor_version=excluded.extractor_version,"
+                    "updated_at=CURRENT_TIMESTAMP",
+                    (ck, r.lat, r.lon, r.title, r.subtitle, r.url, int(r.is_house), _YANDEX_EXTRACTOR_VERSION))
             result[key] = r
         store.con.commit()
     return result

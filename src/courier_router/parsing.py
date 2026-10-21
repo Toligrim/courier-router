@@ -2,6 +2,7 @@ from __future__ import annotations
 import csv
 import re
 import unicodedata
+from datetime import date
 from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -229,6 +230,10 @@ def phone_dial_digits(display: str) -> str:
 _ROUTE_COLUMNS = ("тип", "заказ", "телефон", "район", "адрес", None, "время", "оплата", "комментарий")
 _REQUIRED_ROUTE_COLUMNS = {"тип", "заказ", "адрес", "район", "телефон", "сумма", "оплата", "время"}
 _DECLARED_COUNT_RE = re.compile(r"\bвсего\s+(\d+)\s+выезд", re.IGNORECASE)
+_LEGACY_TITLE_RE = re.compile(
+    r"асрор\s+(?:понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)"
+    r",?\s+(\d{1,2})\.(\d{1,2})\.(\d{4})", re.IGNORECASE,
+)
 
 
 def _cell_text(value: object) -> str:
@@ -240,10 +245,27 @@ def _route_cell(value: object) -> str:
     return "" if text in {"—", "–", "-"} else text
 
 
+def _is_legacy_title(row) -> bool:
+    """Recognize the dated ASROR title only when it cannot contain an order."""
+    if not row or any(_cell_text(value) for value in row[1:]):
+        return False
+    text = " ".join(unicodedata.normalize("NFKC", _cell_text(row[0])).split())
+    match = _LEGACY_TITLE_RE.fullmatch(text)
+    if match is None:
+        return False
+    day, month, year = map(int, match.groups())
+    try:
+        date(year, month, day)
+    except ValueError:
+        return False
+    return True
+
+
 def _table_rows(rows):
     """Map the printed partner layout to the original A-I layout, keeping locations."""
     columns = None
     preamble = False
+    legacy_title_seen = False
     data_started = False
     declared_counts = []
     count = 0
@@ -251,6 +273,9 @@ def _table_rows(rows):
         if not any(_cell_text(value) for value in row):
             continue
         if not data_started:
+            if not preamble and not legacy_title_seen and _is_legacy_title(row):
+                legacy_title_seen = True
+                continue
             labels = [unicodedata.normalize("NFKC", _cell_text(v)).casefold() for v in row]
             if {"тип", "заказ", "адрес"}.issubset(labels):
                 missing = _REQUIRED_ROUTE_COLUMNS.difference(labels)

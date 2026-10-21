@@ -10,7 +10,7 @@ import re
 import sqlite3
 
 SCHEMA_VERSION = 1
-NORMALIZER_VERSION = 1
+NORMALIZER_VERSION = 2
 STREET_TYPES = {
     "ул": "улица", "улица": "улица", "пр": "проспект", "пр-кт": "проспект",
     "просп": "проспект", "проспект": "проспект", "пер": "переулок", "переулок": "переулок",
@@ -40,6 +40,29 @@ def text_key(text: str) -> str:
 
 def street_type(text: str) -> str:
     return STREET_TYPES.get(text.lower().strip(" ."), text.lower().strip(" ."))
+
+
+def street_key(name: str, kind: str) -> str:
+    """Canonical comparison key for GAR and prepared street names.
+
+    GAR uses ``15-я В.О.`` for Vasilievsky Island lines, while address input
+    normalization expands the same suffix to ``15-я Васильевского острова``.
+    Keep the line number and street type outside this alias so they remain hard
+    distinctions in exact and fuzzy matching.
+    """
+    key = text_key(name)
+    if kind == "линия":
+        key = re.sub(r"\s+васильевского острова$", " во", key)
+        key = re.sub(r"\s+в\s*о$", " во", key)
+    return key
+
+
+def _display_street_name(name: str, kind: str) -> str:
+    """Render GAR's compact V.O. spelling as a useful Yandex search query."""
+    if kind == "линия":
+        name = re.sub(r"\s+в\.\s*о\.?$", " Васильевского острова", name, flags=re.I)
+        name = re.sub(r"\s+во$", " Васильевского острова", name, flags=re.I)
+    return name
 
 
 @dataclass(frozen=True)
@@ -89,7 +112,7 @@ def street_conflict(query: str, title: str) -> bool:
         return False
     if a.kind != b.kind:
         return True
-    ak, bk = text_key(a.name), text_key(b.name)
+    ak, bk = street_key(a.name, a.kind), street_key(b.name, b.kind)
     return (re.findall(r"\d+", ak) != re.findall(r"\d+", bk)
             or (set(ak.split()) & _PROTECTED) != (set(bk.split()) & _PROTECTED))
 
@@ -143,7 +166,7 @@ class AddressDictionary:
             self.streets = [dict(zip(("id", "name", "kind", "region", "contexts"), row))
                             for row in con.execute("SELECT object_id,name,kind,region,contexts FROM streets")]
         for row in self.streets:
-            row["key"] = text_key(row["name"])
+            row["key"] = street_key(row["name"], row["kind"])
             row["contexts"] = set(json.loads(row["contexts"]))
         self.contexts = set().union(*(row["contexts"] for row in self.streets)) if self.streets else set()
 
@@ -170,7 +193,7 @@ class AddressDictionary:
         if part is None:
             result.status = "unparsed"
             return result
-        source = text_key(part.name)
+        source = street_key(part.name, part.kind)
         context_parts = (address[:part.start] + "," + address[part.end:]).split(",")
         scopes = set()
         for context in context_parts:
@@ -218,7 +241,7 @@ class AddressDictionary:
                 or (len(scored) > 1 and best_score - scored[1][0] < 0.08)):
             result.status = "ambiguous"
             return result
-        replacement = best["kind"] + " " + best["name"]
+        replacement = best["kind"] + " " + _display_street_name(best["name"], best["kind"])
         result.query = address[:part.start] + replacement + address[part.end:]
         result.status = "corrected"
         result.object_id = best["id"]

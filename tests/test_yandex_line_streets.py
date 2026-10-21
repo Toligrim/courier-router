@@ -94,9 +94,10 @@ def test_old_false_mismatch_is_revalidated(monkeypatch, store):
     query = cli.get_geocoder(config()).query(MENDELEEV)
     store.con.executescript(cli._YANDEX_CACHE_SCHEMA)
     store.con.execute(
-        "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found) "
-        "VALUES(?,?,?,?,?,?,?,1)",
-        (cli.Storage.key(query), y.lat, y.lon, y.title, y.subtitle, y.url, 1),
+        "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found,extractor_version) "
+        "VALUES(?,?,?,?,?,?,?,1,?)",
+        (cli.Storage.key(query), y.lat, y.lon, y.title, y.subtitle, y.url, 1,
+         cli._YANDEX_EXTRACTOR_VERSION),
     )
     store.con.commit()
     store.put_geocode(MENDELEEV, "Василеостровский", GeoPoint(

@@ -55,6 +55,57 @@ def test_hard_street_distinctions(a, b):
     assert ym._match_score(a, b, "Санкт-Петербург") < 0
 
 
+@pytest.fixture
+def gar_vo_dictionary_root(tmp_path, gar_factory):
+    """Mirror the real GAR spelling of OBJECTID 1416014 without touching shared data."""
+    from courier_router.fns_update import update
+    root = tmp_path / "gar-vo-dictionary"
+    update(root, source=gar_factory("20261021", rename={104: "15-я В.О."}),
+           version="20261021", min_streets=1)
+    return root
+
+
+@pytest.mark.parametrize("raw", [
+    "Санкт-Петербург, линия 15-я Васильевского острова, д 80",
+    "СПб, лн 15-я В.О., д 80",
+])
+def test_real_gar_vo_spelling_matches_prepared_full_and_short_forms(gar_vo_dictionary_root, raw):
+    prepared = normalize_address_input(raw)
+    result = AddressDictionary.open_current(gar_vo_dictionary_root).normalize(prepared)
+    assert result.status == "exact"
+    assert result.object_id == 104
+    assert result.query == prepared
+    assert result.normalizer_version == 2
+
+
+@pytest.mark.parametrize("raw, status", [
+    ("Санкт-Петербург, линия 16-я Васильевского острова, д 80", "not_found"),
+    ("Санкт-Петербург, улица 15-я Васильевского острова, д 80", "not_found"),
+    ("Неизвестный город, линия 15-я Васильевского острова, д 80", "unknown_locality"),
+])
+def test_real_gar_vo_spelling_keeps_line_type_and_geography_hard(
+        gar_vo_dictionary_root, raw, status):
+    prepared = normalize_address_input(raw)
+    result = AddressDictionary.open_current(gar_vo_dictionary_root).normalize(prepared)
+    assert result.status == status
+
+
+def test_vo_alias_is_a_hard_distinction_key():
+    short = "Санкт-Петербург, линия 15-я В.О., д 80"
+    full = "Санкт-Петербург, линия 15-я Васильевского острова, д 80"
+    other_line = "Санкт-Петербург, линия 16-я Васильевского острова, д 80"
+    assert not street_conflict(short, full)
+    assert street_conflict(short, other_line)
+
+
+def test_fuzzy_correction_renders_vo_as_yandex_query(gar_vo_dictionary_root):
+    query = "Санкт-Петербург, линия 15-яя В.О., д 80"
+    result = AddressDictionary.open_current(gar_vo_dictionary_root).normalize(query)
+    assert result.status == "corrected"
+    assert result.object_id == 104
+    assert result.query == "Санкт-Петербург, линия 15-я Васильевского острова, д 80"
+
+
 def _stop(address):
     return SimpleNamespace(address_raw=address, district="Приморский", source_row=1,
                            order_no=1, warnings=[], geo=None)

@@ -26,8 +26,9 @@ _SUB_SEL = ("[class*='card-title-view__subtitle'], "
             "[class*='toponym-card-title-view__subtitle']")
 _SNIPPET_SEL = ("[class*='search-snippet-view'], [class*='search-business-snippet-view'], "
                 "li[class*='search-snippet']")
-_GENERIC = {"улица", "ул", "проспект", "пр", "пркт", "пр-кт", "переулок", "пер",
+_GENERIC = {"улица", "ул", "проспект", "пр", "пр-т", "пркт", "пр-кт", "переулок", "пер",
             "шоссе", "ш", "набережная", "наб", "бульвар", "б-р", "линия", "проезд",
+            "пл", "площадь",
             "дом", "д", "литера", "лит", "корпус", "корп", "к", "строение", "стр",
             "деревня", "дер", "поселок", "посёлок", "пос", "село", "снт", "тер",
             "территория", "область", "обл", "район", "р-н", "городское", "поселение"}
@@ -52,22 +53,69 @@ def _norm(s: str) -> str:
     return " ".join(re.sub(r"[^0-9a-zа-яё]+", " ", s.replace("ё", "е")).split())
 
 
-_MARK = (r"ул|улица|пр|пр-?кт|проспект|пер|переулок|ш|шоссе|наб|набережная|"
+_MARK = (r"ул|улица|пр-т|пр|пр-?кт|проспект|пл|площадь|пер|переулок|ш|шоссе|наб|набережная|"
          r"б-р|бульвар|линия|проезд|аллея|туп|тупик")
 _STREET_AFTER = re.compile(rf"(?:^|,)\s*(?:{_MARK})\.?\s+([^,]+)", re.I)
+_STREET_AFTER_ANY = re.compile(rf"(?<!\w)(?P<marker>{_MARK})\.?\s+(?P<name>[^,]+)", re.I)
 _STREET_BEFORE = re.compile(rf"(?:^|,)\s*([^,]+?)\s+(?:{_MARK})\b", re.I)
 
 
-def _street_tokens(s: str) -> set[str]:
-    m = _STREET_AFTER.search(s or "") or _STREET_BEFORE.search(s or "")
-    part = m.group(1) if m else (s or "")
-    # In "1-я линия Васильевского острова" the name continues after "линия".
-    if m and re.search(r"\bлиния\b", m.group(0), re.I):
-        part += " " + (s or "")[m.end():].split(",", 1)[0]
+def _clean_street_part(part: str) -> set[str]:
+    # Building letters may contain more than one character (for example, "литера
+    # ПЛА"). Remove the complete suffix before tokenizing the remaining street.
+    part = re.sub(r"\bлит(?:ера)?(?=\.|\s|№)\.?\s*№?\s*[0-9а-яa-z]+\b", " ", part, flags=re.I)
     part = re.sub(r"\b(?:д|дом|кв|литера?|корп(?:ус)?|стр(?:оение)?)\.?\s*(?:[0-9]+[а-яa-z/]*|[а-яa-z]\b)",
                   " ", part, flags=re.I)
     return {t for t in _norm(part).split() if t not in _GENERIC and not t.isdigit()
             and (len(t) >= 3 or re.fullmatch(r"\d+[а-яa-z]+", t))}
+
+
+def _street_tokens(s: str) -> set[str]:
+    s = s or ""
+    # Prefer the explicit prefix form. It can follow a city without a comma,
+    # as in "Ломоносов ул Красного Флота". If that marker is actually a suffix
+    # ("Театральная площадь д 16"), its remainder has no street-name tokens and
+    # the suffix parser below gets the address instead.
+    m = _STREET_AFTER.search(s)
+    if m:
+        part = m.group(1)
+        return _clean_street_part(part)
+
+    middle = _STREET_AFTER_ANY.search(s)
+    if middle:
+        part = middle.group("name")
+        if middle.group("marker").lower() == "линия":
+            ordinal = re.search(r"(?<!\w)(\d+[- ]?[а-я])\s*$", s[:middle.start()], re.I)
+            if ordinal:
+                part = ordinal.group(1) + " " + part
+        tokens = _clean_street_part(part)
+        if tokens:
+            return tokens
+
+    m = _STREET_BEFORE.search(s)
+    if not m:
+        return _clean_street_part(s)
+    part = m.group(1)
+    # In "1-я линия Васильевского острова" the name continues after "линия".
+    if re.search(r"\bлиния\b", m.group(0), re.I):
+        part += " " + s[m.end():].split(",", 1)[0]
+    return _clean_street_part(part)
+
+
+def _prefix_locality_before_street(s: str) -> str:
+    """Return a locality preceding an uncommaed prefix street marker, if clear."""
+    s = s or ""
+    middle = _STREET_AFTER_ANY.search(s)
+    if not middle or not _clean_street_part(middle.group("name")):
+        return ""
+    # Only inspect the text immediately before the street marker. Earlier comma
+    # components may be a region or territory and have their own review rules.
+    prefix = s[:middle.start()].rsplit(",", 1)[-1].strip()
+    if not prefix:
+        return ""
+    if middle.group("marker").lower() == "линия":
+        prefix = re.sub(r"(?:^|\s)\d+[- ]?[а-я]\s*$", "", prefix, flags=re.I)
+    return prefix
 
 
 def _house_num(s: str) -> str | None:
