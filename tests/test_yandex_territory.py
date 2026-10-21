@@ -83,9 +83,12 @@ def test_legacy_cached_territory_result_is_revalidated_without_network(monkeypat
     query = g.query(ADDRESS, "Выборгский")
     store.con.executescript(cli._YANDEX_CACHE_SCHEMA)
     y = result()
+    # Keep the raw card current so this test isolates final-cache revalidation.
     store.con.execute(
-        "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found) VALUES(?,?,?,?,?,?,?,1)",
-        (cli.Storage.key(query), y.lat, y.lon, y.title, y.subtitle, y.url, 1),
+        "INSERT INTO yandex_maps_cache(cache_key,lat,lon,title,subtitle,url,is_house,found,extractor_version) "
+        "VALUES(?,?,?,?,?,?,?,1,?)",
+        (cli.Storage.key(query), y.lat, y.lon, y.title, y.subtitle, y.url, 1,
+         cli._YANDEX_EXTRACTOR_VERSION),
     )
     store.con.commit()
     store.put_geocode(ADDRESS, "Выборгский", GeoPoint(

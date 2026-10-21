@@ -19,3 +19,11 @@ inspect `systemctl cat courier-router-web.service` and the running process's
 Geocoding is configured as `GEOCODER=yandex`, `DADATA_USE_CLEAN=0`,
 `YANDEX_CROSSCHECK=0` in the shared `.env`. Verify a real authenticated `POST /routes`
 after restarting the service, in addition to `/health`.
+
+## FNS address dictionary
+
+`courier-router-dictionary.service` and `.timer` check GAR releases daily at
+04:00 Europe/Moscow, build and validate a separate SQLite snapshot, and publish
+it atomically. Install these units only in the deployment that contains the
+dictionary code; a feature worktree needs its own paths. Bootstrap, inspection,
+rollback, cache rules and installation: [FNS_DICTIONARY.md](../docs/FNS_DICTIONARY.md).

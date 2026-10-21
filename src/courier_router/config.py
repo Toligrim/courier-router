@@ -17,6 +17,7 @@ class Config:
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
     geocoder: str = os.getenv("GEOCODER", "yandex").lower()
+    address_dictionary_dir: str = os.getenv("ADDRESS_DICTIONARY_DIR", "data/cache/address-dictionary")
     dadata_use_clean: bool = os.getenv("DADATA_USE_CLEAN", "0").strip().lower() not in {"0", "false", "no", ""}
     router: str = os.getenv("ROUTER", "ors").lower()
     db_path: str = os.getenv("DB_PATH", "data/cache/courier-router.db")
