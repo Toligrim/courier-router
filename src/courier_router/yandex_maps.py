@@ -124,6 +124,13 @@ def _house_num(s: str) -> str | None:
     s = re.split(r"координаты\s*:", s or "", maxsplit=1, flags=re.I)[0]
     s = re.sub(r"(?:\b|(?<=\d))\s*(?:к|корп(?:ус)?|стр(?:оение)?)\.?\s*\d+[а-яa-z]?\b",
                " ", s, flags=re.I)
+    # Entrance, apartment, and floor labels describe delivery details, not the house.
+    # A Yandex card can say "проспект Энгельса, 93, подъезд 9".
+    s = re.sub(
+        r"\b(?:подъезд|парадная|парадн|вход|кв|квартира|этаж|эт|офис|помещение)"
+        r"\.?\s*№?\s*\d+[а-яa-z]?\b",
+        " ", s, flags=re.I,
+    )
     number = r"[0-9]{1,4}(?:/[0-9]+)?(?:[а-яa-z](?![а-яa-z0-9]))?"
     m = re.search(rf"(?:^|[ ,])(?:д|дом)\.?\s*({number})", s, re.I)
     if m:
