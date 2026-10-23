@@ -233,3 +233,40 @@ def test_yandex_locality_structure_and_numbered_streets(monkeypatch, address, ti
     geo = cli.get_geocoder(config()).geocode(address)
     assert geo.raw["_resolver"]["status"] == status
     assert (geo.confidence >= 0.9) == (status == "verified")
+
+
+@pytest.mark.parametrize("card_title, expected_house, accepted", [
+    ("проспект Энгельса, 93, подъезд 9", "93", True),
+    ("проспект Энгельса, 93, парадная 9", "93", True),
+    ("проспект Энгельса, 93, подъезд № 9", "93", True),
+    ("проспект Энгельса, 95, подъезд 9", "95", False),
+])
+def test_yandex_entrance_is_not_mistaken_for_house(
+        monkeypatch, store, card_title, expected_house, accepted):
+    source = "г Санкт-Петербург, пр-кт Энгельса, д 93 парадная 9 кв 42"
+    y = result(title=card_title)
+    y.subtitle = "Санкт-Петербург"
+    assert ym._house_num(card_title) == expected_house
+    monkeypatch.setattr(
+        ym, "lookup_batch",
+        lambda jobs: {key: y for key, _, _ in jobs},
+    )
+
+    if not accepted:
+        with pytest.raises(RuntimeError, match="сильно расходится"):
+            cli.geocode_stops(config(), [stop(address=source)], store)
+        assert store.get_geocode(source, "Пушкинский") is None
+    else:
+        report = cli.geocode_stops(config(), [stop(address=source)], store)
+        assert report[0]["resolver_status"] == "verified"
+        assert report[0]["coord_status"] == "ok"
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("2-я Советская улица, 12, парадная 3", "12"),
+    ("улица Ленина, 17, корпус 1, подъезд 4", "17"),
+    ("улица Ленина, 17 стр 1, этаж 4", "17"),
+    ("улица Бабушкина, Санкт-Петербург, 192174 Координаты: 59.863071, 30.458125", None),
+])
+def test_house_number_ignores_delivery_details_without_losing_street_number(title, expected):
+    assert ym._house_num(title) == expected
