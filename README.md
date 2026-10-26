@@ -70,3 +70,6 @@ LLM намеренно не участвует в математической �
 Подробная установка: `INSTALL.md`.
 Конвертация маршрутных PDF партнёра: `PDF_CONVERTER.md`.
 Инструкция для автономного coding/deployment-агента: `AGENT_DEPLOYMENT_PROMPT.md`.
+
+Постоянные JSON-логи, поиск ошибки по номеру и настройка хранения:
+[docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md).

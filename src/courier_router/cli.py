@@ -14,6 +14,8 @@ from .report import itinerary_text, route_json
 from .routing import ORSRouter, OSRMRouter, RETRYABLE_ROUTING_STATUS
 from .storage import Storage
 from .address_dictionary import AddressDictionary, NORMALIZER_VERSION
+from .diagnostics import configure_logging, log_event, stage
+from .errors import GeocodingError, TableError
 
 
 def minutes(s: str) -> int:
@@ -211,6 +213,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None)
         ]
         g.prefetch(pending)
     for s in stops:
+        log_event("geocoder.stop.started", source_row=s.source_row)
         alias = get_alias(s.address_raw, s.district) if get_alias else None
         cached = store.get_geocode(s.address_raw, s.district)
         cache_valid = _cache_matches_geocoder(c, cached, g)
@@ -233,7 +236,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None)
                     _flag_coord(s, "Координата с Яндекс Карт (адреса нет в базе DaData) — проверьте на карте.")
                     source = "yandex_fallback"
                 elif c.llm_provider == "none":
-                    raise RuntimeError(f"Строка {s.source_row}, адрес {s.address_raw!r}: {first}") from first
+                    raise RuntimeError(f"Строка {s.source_row}, адрес {_yandex_query(s.address_raw)!r}: {first}") from first
                 else:
                     cleaned = maybe_llm_clean(c, s.address_raw, s.district)
                     s.geo = g.geocode(cleaned, s.district)
@@ -251,7 +254,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None)
                 found_address = resolver.get("yandex_title") or s.geo.normalized_address
                 raise RuntimeError(
                     f"Строка {s.source_row}: найденный адрес сильно расходится с исходным. "
-                    f"Исходный: {s.address_raw!r}. Найдено: {found_address!r}.{hint}"
+                    f"Исходный: {_yandex_query(s.address_raw)!r}. Найдено: {found_address!r}.{hint}"
                 )
 
         outside_expected_area = not (58.2 <= s.geo.lat <= 61.7 and 26.5 <= s.geo.lon <= 36.5)
@@ -281,6 +284,9 @@ def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None)
         # route build from poisoning subsequent runs with the rejected coordinate.
         if not cache_valid:
             store.put_geocode(s.address_raw, s.district, s.geo)
+
+        log_event("geocoder.stop.completed", source_row=s.source_row, source=source,
+                  precision=s.geo.precision, confidence=s.geo.confidence, resolver_status=resolver_status)
 
         provider = str(getattr(s.geo, "provider", ""))
         report.append({
@@ -370,14 +376,21 @@ def _yandex_lookup_cached(c, store, jobs, retry_misses=False):
         if (row is None or row[7] != _YANDEX_EXTRACTOR_VERSION
                 or (retry_misses and not row[6])):
             todo.append((key, query, near, ck))
+            log_event("geocoder.cache.miss", query=query)
         elif not row[6]:
             result[key] = None
+            log_event("geocoder.cache.hit", query=query, found=False)
         else:
             result[key] = ym.YResult(row[0], row[1], row[2] or "", row[3] or "", row[4] or "", bool(row[5]))
+            log_event("geocoder.cache.hit", query=query, found=True)
     if todo:
         fresh = ym.lookup_batch([(k, q, n) for k, q, n, _ in todo])
         for key, query, near, ck in todo:
             r = fresh.get(key)
+            if isinstance(r, GeocodingError):
+                # A transport/extraction failure says nothing about address existence.
+                result[key] = r
+                continue
             if r is None:
                 store.con.execute(
                     "INSERT INTO yandex_maps_cache(cache_key,found,extractor_version) VALUES(?,0,?) "
@@ -404,7 +417,7 @@ def _yandex_geopoint(c, store, address):
     except ym.Unavailable:
         return None
     y = found.get("x")
-    if not y or not y.is_house:
+    if not isinstance(y, ym.YResult) or not y.is_house:
         return None
     if not (58.2 <= y.lat <= 61.7 and 26.5 <= y.lon <= 36.5):
         return None
@@ -443,7 +456,7 @@ def _yandex_crosscheck(c, stops, report, store):
         if r.get("coord_source") != "dadata":
             continue  # координата уже от Яндекса (fallback) — сверять не с чем
         y = found.get(str(s.source_row))
-        if y is None:
+        if not isinstance(y, ym.YResult):
             continue  # второй источник промолчал — координата DaData как была
         in_area = 58.2 <= y.lat <= 61.7 and 26.5 <= y.lon <= 36.5
         delta = haversine_m((s.geo.lat, s.geo.lon), (y.lat, y.lon))
@@ -472,18 +485,27 @@ def _yandex_crosscheck(c, stops, report, store):
 def cmd_plan(args):
     c = Config()
     store = Storage(c.db_path)
-    stops = read_table(args.xlsx, c.default_service_min)
-    g = get_geocoder(c)
-    report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence, geocoder=g)
-    d = depot(c, g)
+    with stage("parse", file_type=Path(args.xlsx).suffix.lower()):
+        try:
+            stops = read_table(args.xlsx, c.default_service_min)
+        except ValueError as exc:
+            raise TableError(str(exc)) from exc
+        log_event("table.parsed", stop_count=len(stops))
+    with stage("geocode", provider=c.geocoder):
+        g = get_geocoder(c)
+        report = geocode_stops(c, stops, store, allow_low_confidence=args.allow_low_confidence, geocoder=g)
+        d = depot(c, g)
 
     coords = [(d.lat,d.lon)] + [(s.geo.lat,s.geo.lon) for s in stops]
     router = get_router(c)
-    durations, distances = router.matrix(coords)
-    sol = solve_single_vehicle(
-        stops, durations, distances, minutes(args.depart),
-        end_mode=args.end, time_limit_sec=c.solver_time_limit_sec
-    )
+    with stage("routing_matrix", provider=c.router, point_count=len(coords)):
+        durations, distances = router.matrix(coords)
+    with stage("optimization", stop_count=len(stops)):
+        sol = solve_single_vehicle(
+            stops, durations, distances, minutes(args.depart),
+            end_mode=args.end, time_limit_sec=c.solver_time_limit_sec
+        )
+        log_event("solver.completed", feasible=sol.feasible)
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     (out/"geocoding-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -496,7 +518,8 @@ def cmd_plan(args):
     route_coords = [(d.lat,d.lon)] + [(s.geo.lat,s.geo.lon) for s in ordered_stops]
     if args.end == "depot":
         route_coords.append((d.lat,d.lon))
-    geometry, geometry_warning = route_geometry(router, route_coords)
+    with stage("routing_geometry", provider=c.router):
+        geometry, geometry_warning = route_geometry(router, route_coords)
 
     text = itinerary_text(args.date, stops, sol, d.normalized_address, minutes(args.depart), args.end)
     text = _append_route_warning(text, geometry_warning)
@@ -507,10 +530,13 @@ def cmd_plan(args):
     (out/"route.json").write_text(json.dumps(route_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     markers = [(s.geo.lat,s.geo.lon,s.operation.value) for s in ordered_stops]
-    render_map(out/"route.png", (d.lat,d.lon), markers, geometry, c.tile_url, c.tile_user_agent)
+    with stage("render_map"):
+        render_map(out/"route.png", (d.lat,d.lon), markers, geometry, c.tile_url, c.tile_user_agent)
 
-    print(text)
-    print(f"\nГотово: {out.resolve()}")
+    log_event("route.artifacts.saved", stop_count=len(stops), output_id=out.name)
+    if not getattr(args, "quiet", False):
+        print(text)
+        print(f"\nГотово: {out.resolve()}")
     return 0
 
 
@@ -697,12 +723,14 @@ def build_parser():
 
 
 def main():
+    configure_logging()
     args = build_parser().parse_args()
     try:
         return args.func(args) or 0
     except KeyboardInterrupt:
         return 130
     except Exception as e:
+        log_event("cli.failed", level=40, exc_info=True)
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 

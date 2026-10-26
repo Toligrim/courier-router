@@ -13,4 +13,5 @@ data/cache/*
 data/osm/*
 !data/osm/.gitkeep
 data/web/*
+data/logs/
 *.db

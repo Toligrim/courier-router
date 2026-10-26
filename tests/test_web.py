@@ -142,7 +142,7 @@ def test_home_page_has_dropzone_progress_overlay_and_disabled_submit(monkeypatch
     assert 'id="selected-file"' in page
     assert 'id="build-submit" type="submit" disabled' in page
     assert 'id="build-overlay"' in page
-    assert "Строю маршрут, это займёт до минуты" in page
+    assert "Строю маршрут. Это может занять несколько минут" in page
     assert "input.files" in page
     assert "pageshow" in page
     assert "prefers-color-scheme: dark" in page
@@ -219,14 +219,13 @@ def test_failed_pdf_plan_cleans_converted_files(monkeypatch, tmp_path):
     assert not list((tmp_path / "runs").rglob("input.xlsx"))
 
 
-def test_home_page_surfaces_error_line_and_keeps_full_details(monkeypatch):
+def test_home_page_shows_friendly_message_and_reference_without_technical_details(monkeypatch):
     monkeypatch.setattr(web, "_list_runs", lambda user: [])
-    page = web._home_page("tolya", "headless failed\nERROR: Yandex timeout\ntrace line")
+    page = web._home_page("tolya", "Не удалось дождаться ответа сервиса карт.\nНомер ошибки: abc123")
 
-    assert '<div class="error-summary">ERROR: Yandex timeout</div>' in page
-    assert '<summary>Подробности</summary>' in page
-    assert "headless failed" in page
-    assert "trace line" in page
+    assert "Не удалось дождаться" in page
+    assert "Номер ошибки: abc123" in page
+    assert '<summary>Подробности</summary>' not in page
 
 
 def _sample_route(review: bool = True, done: bool = False, second_stop: bool = False):

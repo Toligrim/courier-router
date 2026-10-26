@@ -1,6 +1,7 @@
 from __future__ import annotations
 import time
 import httpx
+from .diagnostics import log_event, safe_url
 
 ORS_BASE_URL = "https://api.heigit.org/openrouteservice/v2"
 RETRYABLE_ROUTING_STATUS = {500, 502, 503, 504}
@@ -20,12 +21,19 @@ class ORSRouter:
 
     def _post(self, url: str, payload: dict):
         for attempt in range(3):
+            started = time.monotonic()
             try:
                 response = self.client.post(url, json=payload)
             except httpx.TransportError:
+                log_event("routing.request.failed", level=30, exc_info=True,
+                          provider=self.name, attempt=attempt+1, url=safe_url(url), retry=attempt<2,
+                          elapsed_ms=round((time.monotonic()-started)*1000, 1))
                 if attempt == 2:
                     raise
             else:
+                log_event("routing.response", provider=self.name, attempt=attempt+1,
+                          status=response.status_code, url=safe_url(url),
+                          elapsed_ms=round((time.monotonic()-started)*1000, 1))
                 if response.status_code not in RETRYABLE_ROUTING_STATUS or attempt == 2:
                     response.raise_for_status()
                     return response
