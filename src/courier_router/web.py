@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import shutil
+import time
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,8 @@ from .geocode import strip_apartment
 from .parsing import normalize_phone, phone_dial_digits
 from .pdf_converter import convert_pdf_to_xlsx
 from .storage import Storage
+from .diagnostics import configure_logging, log_context, log_event, stage
+from .errors import user_error
 
 RUNS_ROOT = Path(os.getenv("WEB_RUNS_PATH", "data/web/runs"))
 USERS_PATH = Path(os.getenv("WEB_USERS_PATH", "data/web/users.json"))
@@ -2001,22 +2004,10 @@ def _plain_error(error: str) -> str:
 def _build_error(error: str) -> str:
     if not error:
         return ""
-    raw = str(error).strip()
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    summary = lines[0] if lines else raw
-    for line in lines:
-        if "ERROR:" in line:
-            summary = line[line.index("ERROR:"):]
-            break
-    details = ""
-    if len(lines) > 1 or summary != raw:
-        details = (
-            '<details><summary>Подробности</summary>'
-            f'<pre>{html.escape(raw)}</pre></details>'
-        )
+    message = html.escape(str(error).strip()).replace("\n", "<br>")
     return (
         '<div class="error" role="alert">'
-        f'<div class="error-summary">{html.escape(summary)}</div>{details}</div>'
+        f'<div class="error-summary">{message}</div></div>'
     )
 
 
@@ -2140,7 +2131,7 @@ def _home_page(user: str, error: str = "") -> str:
     body = f"""{err}
 <section class="card">
   <h1>Новый маршрут</h1>
-  <p class="lead">Загрузите XLSX, CSV или PDF с заказами. После запуска расчёт может занять до минуты.</p>
+  <p class="lead">Загрузите XLSX, CSV или PDF с заказами. Расчёт может занять несколько минут.</p>
   <form id="route-form" method="post" action="/routes" enctype="multipart/form-data">
     <label class="upload" id="drop-zone" for="route-file">
       <input class="file-input" id="route-file" type="file" name="table" accept=".xlsx,.csv,.pdf" required>
@@ -2179,7 +2170,7 @@ def _home_page(user: str, error: str = "") -> str:
 <div class="build-overlay" id="build-overlay" role="status" aria-live="polite" aria-busy="true" hidden>
   <div class="build-overlay-card">
     <div class="spinner" aria-hidden="true"></div>
-    <h2>Строю маршрут, это займёт до минуты</h2>
+    <h2>Строю маршрут. Это может занять несколько минут</h2>
     <p class="muted">Не закрывайте страницу.</p>
   </div>
 </div>""" + HOME_JS
@@ -2428,6 +2419,25 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         max_age=60 * 60 * 24 * 30,
     )
 
+    @app.middleware("http")
+    async def diagnostic_request(request: Request, call_next):
+        request_id = uuid4().hex[:16]
+        request.state.request_id = request_id
+        started = time.monotonic()
+        with log_context(request_id=request_id):
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                log_event("request.failed", level=40, exc_info=True)
+                message = f"{user_error(exc)}\nНомер ошибки: {request_id}"
+                response = HTMLResponse(_shell("Ошибка", _plain_error(message)), status_code=500)
+            route = request.scope.get("route")
+            log_event("request.completed", method=request.method,
+                      path=getattr(route, "path", "[unmatched]"), status=response.status_code,
+                      elapsed_ms=round((time.monotonic()-started)*1000, 1))
+            response.headers["X-Request-ID"] = request_id
+            return response
+
     @app.get("/login", response_class=HTMLResponse)
     async def login_get(request: Request):
         if _require_user(request):
@@ -2474,32 +2484,39 @@ def create_app(session_secret: str | None = None) -> FastAPI:
         if len(payload) > MAX_UPLOAD_BYTES:
             return HTMLResponse(_home_page(user, f"Файл больше лимита {MAX_UPLOAD_BYTES // 1024 // 1024} МБ"), status_code=413)
         run_id = uuid4().hex[:12]
-        folder = _user_runs_root(user) / run_id
-        folder.mkdir(parents=True, exist_ok=False)
-        input_path = folder / f"input{suffix}"
-        input_path.write_bytes(payload)
-        meta = {"date": day, "depart": depart, "end": end, "uploaded_by": user, "filename": table.filename}
-        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        table_path = input_path
-        if suffix == ".pdf":
-            try:
-                table_path, _ = await run_in_threadpool(
-                    convert_pdf_to_xlsx, input_path, folder / "input.xlsx"
-                )
-            except Exception as exc:  # noqa: BLE001
-                shutil.rmtree(folder, ignore_errors=True)
-                return HTMLResponse(_home_page(user, f"Не удалось преобразовать PDF: {exc}"), status_code=400)
-        args = SimpleNamespace(
-            xlsx=str(table_path), date=day, depart=depart, end=end,
-            output=str(folder), allow_low_confidence=bool(allow_low_confidence),
-        )
-        try:
-            await run_in_threadpool(cmd_plan, args)
-        except Exception as exc:
+        with log_context(run_id=run_id):
+            log_event("route.build.started", file_type=suffix, upload_bytes=len(payload))
+            folder = _user_runs_root(user) / run_id
+            folder.mkdir(parents=True, exist_ok=False)
+            input_path = folder / f"input{suffix}"
+            input_path.write_bytes(payload)
+            meta = {"date": day, "depart": depart, "end": end, "uploaded_by": user, "filename": table.filename}
+            (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            table_path = input_path
             if suffix == ".pdf":
-                shutil.rmtree(folder, ignore_errors=True)
-            return HTMLResponse(_home_page(user, f"Не удалось построить маршрут: {exc}"), status_code=400)
-        return RedirectResponse(f"/routes/{run_id}", status_code=303)
+                try:
+                    with stage("pdf_conversion"):
+                        table_path, _ = await run_in_threadpool(
+                            convert_pdf_to_xlsx, input_path, folder / "input.xlsx"
+                        )
+                except Exception:
+                    log_event("route.build.failed", level=40, exc_info=True)
+                    shutil.rmtree(folder, ignore_errors=True)
+                    message = "Не удалось прочитать PDF. Проверьте, что это маршрутный лист, или загрузите таблицу XLSX."
+                    return HTMLResponse(_home_page(user, f"{message}\nНомер ошибки: {request.state.request_id}"), status_code=400)
+            args = SimpleNamespace(
+                xlsx=str(table_path), date=day, depart=depart, end=end,
+                output=str(folder), allow_low_confidence=bool(allow_low_confidence), quiet=True,
+            )
+            try:
+                await run_in_threadpool(cmd_plan, args)
+            except Exception as exc:
+                log_event("route.build.failed", level=40, exc_info=True)
+                if suffix == ".pdf":
+                    shutil.rmtree(folder, ignore_errors=True)
+                return HTMLResponse(_home_page(user, f"{user_error(exc)}\nНомер ошибки: {request.state.request_id}"), status_code=400)
+            log_event("route.build.completed")
+            return RedirectResponse(f"/routes/{run_id}", status_code=303)
 
     @app.get("/routes/{run_id}", response_class=HTMLResponse)
     async def route_view(request: Request, run_id: str):
@@ -2566,7 +2583,8 @@ def create_app(session_secret: str | None = None) -> FastAPI:
                 recompute_route, c, folder, order_rows, deleted_rows, coord_overrides, store
             )
         except Exception as exc:  # noqa: BLE001
-            return HTMLResponse(f"Не удалось пересчитать маршрут: {exc}", status_code=400)
+            log_event("route.edit.failed", level=40, exc_info=True, run_id=run_id)
+            return HTMLResponse(html.escape(f"{user_error(exc)} Номер ошибки: {request.state.request_id}"), status_code=400)
         return {"ok": True}
 
     @app.post("/routes/{run_id}/done")
@@ -2637,6 +2655,7 @@ def create_app(session_secret: str | None = None) -> FastAPI:
 
 
 def main() -> None:
+    configure_logging()
     parser = argparse.ArgumentParser(prog="courier-web")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="Запустить веб-интерфейс")

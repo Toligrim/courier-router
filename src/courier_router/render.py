@@ -3,6 +3,7 @@ import io, math
 from pathlib import Path
 import httpx
 from PIL import Image, ImageDraw, ImageFont
+from .diagnostics import log_event
 
 TILE = 256
 
@@ -45,6 +46,7 @@ def render_map(
     x0, x1 = int(left // TILE), int((left + width) // TILE)
     y0, y1 = int(top // TILE), int((top + height) // TILE)
     n = 2 ** zoom
+    failed_tiles = 0
     for tx in range(x0, x1+1):
         for ty in range(y0, y1+1):
             if not (0 <= ty < n):
@@ -56,7 +58,12 @@ def render_map(
                 tile = Image.open(io.BytesIO(r.content)).convert("RGB")
                 img.paste(tile, (round(tx*TILE-left), round(ty*TILE-top)))
             except Exception:
-                pass
+                failed_tiles += 1
+                if failed_tiles == 1:
+                    log_event("map.tile.failed", level=30, exc_info=True)
+
+    client.close()
+    log_event("map.tiles.completed", failed_tiles=failed_tiles, zoom=zoom)
 
     draw = ImageDraw.Draw(img)
 

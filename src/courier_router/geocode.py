@@ -8,6 +8,8 @@ import httpx
 
 from .domain import GeoPoint
 from .address_dictionary import NORMALIZER_VERSION, Normalization, street_conflict
+from .errors import GeocodingError
+from .diagnostics import log_event
 
 RESOLVER_VERSION = 5
 
@@ -500,7 +502,7 @@ class DaDataGeocoder:
             # abort the whole route. Such a point is flagged for manual review.
             if not ranked:
                 detail = f" ({degraded_reason})" if degraded_reason else ""
-                raise ValueError(f"DaData не вернула адрес: {address}{detail}")
+                raise ValueError(f"DaData не вернула адрес: {query}{detail}")
             chosen = ranked[0]
             status = "strong_mismatch" if chosen[1] else "review"
 
@@ -537,6 +539,9 @@ class YandexMapsGeocoder:
             prepared = normalize_address_input(address)
             self._normalizations[address] = (self.dictionary.normalize(prepared) if self.dictionary
                                              else Normalization(prepared, prepared, status="unavailable"))
+            normalization = self._normalizations[address]
+            log_event("address.normalized", query=normalization.query, status=normalization.status,
+                      dictionary_version=self.dictionary_version)
         return self._normalizations[address]
 
     def query(self, address: str, district: str = "") -> str:
@@ -556,8 +561,10 @@ class YandexMapsGeocoder:
         query = self.query(address, district)
         self.prefetch([(address, district)])
         y = self._results[query]
+        if isinstance(y, GeocodingError):
+            raise y
         if y is None:
-            raise ValueError(f"Яндекс Карты не нашли адрес: {address}")
+            raise GeocodingError("not_found", f"Яндекс Карты не нашли адрес: {query}")
         score = ym._match_score(query, y.title, y.subtitle)
         house = ym._house_num(query)
         found_house = ym._house_num(y.title) or ym._house_num(y.subtitle)
@@ -649,7 +656,7 @@ class PublicNominatimGeocoder:
         r.raise_for_status()
         items = r.json()
         if not items:
-            raise ValueError(f"Nominatim не нашёл адрес: {address}")
+            raise ValueError(f"Nominatim не нашёл адрес: {strip_apartment(address)}")
         item = items[0]
         typ = item.get("type", "")
         conf = 0.85 if typ in {"house", "building"} else 0.65

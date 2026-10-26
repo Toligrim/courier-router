@@ -12,8 +12,12 @@ import os
 import math
 import re
 import urllib.parse
+import logging
+import time
 from dataclasses import dataclass
 from .address_dictionary import street_conflict
+from .diagnostics import log_event, safe_url
+from .errors import GeocodingError
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.expanduser("~/.cache/ms-playwright"))
 
@@ -44,8 +48,18 @@ class YResult:
     is_house: bool
 
 
-class Unavailable(RuntimeError):
-    pass
+class Unavailable(GeocodingError):
+    def __init__(self, message):
+        super().__init__("unavailable", message)
+
+
+def _failure(exc: Exception, phase: str) -> GeocodingError:
+    if isinstance(exc, GeocodingError):
+        return exc
+    # Both built-in and Playwright timeouts use this name; Playwright is optional
+    # for legacy providers, so importing it remains inside lookup_batch.
+    code = "timeout" if isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError" else "unavailable"
+    return GeocodingError(code, f"Yandex {phase}: {type(exc).__name__}: {exc}")
 
 
 def _norm(s: str) -> str:
@@ -157,18 +171,26 @@ def _match_score(query: str, title: str, subtitle: str) -> float:
     return street_hit * 0.6 + house_hit * 0.5 - org_penalty
 
 
-def _coords_from_card(page) -> tuple[float, float] | None:
+def _coords_from_card(page) -> tuple[float, float]:
+    started = time.monotonic()
     try:
-        el = page.wait_for_selector(_COORD_SEL, timeout=8000)
+        el = page.wait_for_selector(_COORD_SEL, timeout=20000)
+        # A visible container can precede its coordinate text during hydration.
+        # Wait for numbers in that same card, never scrape unrelated map centres.
+        if hasattr(page, "wait_for_function"):
+            page.wait_for_function(
+                "el => /-?\\d{1,2}\\.\\d{3,},\\s*-?\\d{1,3}\\.\\d{3,}/.test(el.innerText)",
+                arg=el, timeout=max(1, int(20000-(time.monotonic()-started)*1000)),
+            )
         m = re.search(r"(-?\d{1,2}\.\d{3,}),\s*(-?\d{1,3}\.\d{3,})", el.inner_text())
         if m:
             lat, lon = float(m.group(1)), float(m.group(2))
             if math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180:
                 return lat, lon  # Яндекс печатает lat, lon
-    except Exception:
-        pass
+    except Exception as exc:
+        raise _failure(exc, "coordinates") from exc
     # Coordinates elsewhere in the HTML may belong to the map centre or another result.
-    return None
+    raise GeocodingError("extraction", "Yandex card does not contain valid coordinates")
 
 
 def _card_text(page):
@@ -193,7 +215,17 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
     url = (f"https://yandex.ru/maps/?ll={lon0}%2C{lat0}&z=15&mode=search&text="
            + urllib.parse.quote(address))
     page.goto(url, wait_until="domcontentloaded", timeout=40000)
-    page.wait_for_selector(f"{_TITLE_SEL}, {_SNIPPET_SEL}", state="visible", timeout=15000)
+    if re.search(r"captcha|showcaptcha", page.url, re.I):
+        raise GeocodingError("blocked", "Yandex returned a CAPTCHA page")
+    try:
+        page.wait_for_selector(f"{_TITLE_SEL}, {_SNIPPET_SEL}", state="visible", timeout=20000)
+    except Exception:
+        if re.search(r"captcha|showcaptcha", page.url, re.I):
+            raise GeocodingError("blocked", "Yandex returned a CAPTCHA page")
+        body = page.locator("body").inner_text(timeout=2000)
+        if re.search(r"ничего не нашл|ничего не найден|не удалось найти", body, re.I):
+            return None
+        raise
 
     # 1) Яндекс сразу открыл карточку одного дома
     if "/house/" in page.url or "/geo/" in page.url:
@@ -226,8 +258,8 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
         try:
             sn.click(timeout=4000)
             page.wait_for_selector(_COORD_SEL, state="visible", timeout=15000)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise _failure(exc, "candidate card") from exc
         coords = _coords_from_card(page)
         if coords:
             ct, csub = _card_text(page)
@@ -244,7 +276,7 @@ def _one(page, address: str, near: tuple[float, float] | None) -> YResult | None
 
 
 def lookup_batch(items: list[tuple[str, str, tuple[float, float] | None]]
-                 ) -> dict[str, YResult | None]:
+                 ) -> dict[str, YResult | GeocodingError | None]:
     if not items:
         return {}
     try:
@@ -252,23 +284,57 @@ def lookup_batch(items: list[tuple[str, str, tuple[float, float] | None]]
     except Exception as e:  # noqa: BLE001
         raise Unavailable(f"playwright не установлен: {e}") from e
 
-    out: dict[str, YResult | None] = {}
+    out: dict[str, YResult | GeocodingError | None] = {}
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(locale="ru-RU", timezone_id="Europe/Moscow",
-                                      user_agent=_UA, viewport={"width": 1366, "height": 900})
-            for key, address, near in items:
-                page = ctx.new_page()
-                try:
-                    out[key] = _one(page, address, near)
-                except Exception:
-                    out[key] = None
-                finally:
-                    page.close()
-            browser.close()
+            try:
+                ctx = browser.new_context(locale="ru-RU", timezone_id="Europe/Moscow",
+                                          user_agent=_UA, viewport={"width": 1366, "height": 900})
+                for key, address, near in items:
+                    for attempt in range(1, 3):
+                        page = None
+                        started = time.monotonic()
+                        log_event("geocoder.lookup.started", query=address, attempt=attempt)
+                        try:
+                            page = ctx.new_page()
+                            out[key] = _one(page, address, near)
+                            result = out[key]
+                            log_event("geocoder.lookup.completed", query=address, attempt=attempt,
+                                      found=result is not None, title=result.title if result else None,
+                                      url=safe_url(page.url), elapsed_ms=round((time.monotonic()-started)*1000, 1))
+                            break
+                        except Exception as exc:
+                            error = _failure(exc, "lookup" if page is not None else "page creation")
+                            out[key] = error
+                            retry = error.code == "timeout" and attempt < 2
+                            log_event("geocoder.lookup.failed", level=logging.WARNING if retry else logging.ERROR,
+                                      exc_info=True, query=address, attempt=attempt, reason=error.code,
+                                      retry=retry, url=safe_url(page.url) if page is not None else None,
+                                      elapsed_ms=round((time.monotonic()-started)*1000, 1))
+                            if not retry:
+                                break
+                        finally:
+                            if page is not None:
+                                _close_browser_resource(page, "page")
+            finally:
+                _close_browser_resource(browser, "browser")
     except Unavailable:
         raise
     except Exception as e:  # noqa: BLE001
+        if out:
+            # A driver/context shutdown must not discard addresses already found.
+            log_event("geocoder.browser.failed", level=logging.ERROR, exc_info=True)
+            for key, _, _ in items:
+                if key not in out:
+                    out[key] = _failure(e, "browser")
+            return out
         raise Unavailable(f"headless-браузер недоступен: {e}") from e
     return out
+
+
+def _close_browser_resource(resource, kind):
+    try:
+        resource.close()
+    except Exception:
+        log_event("geocoder.cleanup.failed", level=logging.WARNING, exc_info=True, resource=kind)
