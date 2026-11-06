@@ -75,7 +75,7 @@ def test_real_gar_vo_spelling_matches_prepared_full_and_short_forms(gar_vo_dicti
     assert result.status == "exact"
     assert result.object_id == 104
     assert result.query == prepared
-    assert result.normalizer_version == 2
+    assert result.normalizer_version == 3
 
 
 @pytest.mark.parametrize("raw, status", [

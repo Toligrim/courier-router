@@ -10,7 +10,7 @@ import re
 import sqlite3
 
 SCHEMA_VERSION = 1
-NORMALIZER_VERSION = 2
+NORMALIZER_VERSION = 3
 STREET_TYPES = {
     "ул": "улица", "улица": "улица", "пр": "проспект", "пр-кт": "проспект",
     "просп": "проспект", "проспект": "проспект", "пер": "переулок", "переулок": "переулок",
