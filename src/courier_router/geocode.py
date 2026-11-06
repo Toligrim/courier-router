@@ -79,6 +79,7 @@ def _normalize_street_shorthands(text: str) -> str:
     rest = text[suffix.start():] if suffix else ""
     street = re.sub(r"\bпр\s*-\s*т\b\.?", "проспект", street, flags=re.I)
     street = re.sub(r"\bпл\b\.?", "площадь", street, flags=re.I)
+    street = re.sub(r"\bост\s*-\s*в\b\.?", "остров", street, flags=re.I)
     return street + rest
 
 
