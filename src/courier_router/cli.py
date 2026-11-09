@@ -317,7 +317,7 @@ def geocode_stops(c, stops, store, allow_low_confidence=False, *, geocoder=None)
     return report
 
 
-_YANDEX_EXTRACTOR_VERSION = 2
+_YANDEX_EXTRACTOR_VERSION = 3
 
 _YANDEX_CACHE_SCHEMA = """CREATE TABLE IF NOT EXISTS yandex_maps_cache (
   cache_key TEXT PRIMARY KEY, lat REAL, lon REAL, title TEXT, subtitle TEXT,

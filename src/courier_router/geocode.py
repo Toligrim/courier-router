@@ -11,7 +11,7 @@ from .address_dictionary import NORMALIZER_VERSION, Normalization, street_confli
 from .errors import GeocodingError
 from .diagnostics import log_event
 
-RESOLVER_VERSION = 5
+RESOLVER_VERSION = 6
 
 QC_CONF = {
     0: ("exact", 0.99),
@@ -173,7 +173,9 @@ def _same_house_number(a: str | None, b: str | None) -> bool:
         return False
     digits = da.group(1)
     short, long = sorted((a, b), key=len)
-    return short == digits and long.startswith(digits) and long != short
+    return short == digits and re.fullmatch(
+        re.escape(digits) + r"(?:[а-яa-z]|/[0-9]+[а-яa-z]?)", long, re.I,
+    ) is not None
 
 
 def _extract_block(source: str) -> str | None:

@@ -169,7 +169,7 @@ def test_mock_cards_preserve_geography_and_house_guards(
     resolver = result.raw["_resolver"]
 
     assert resolver["status"] == status
-    assert resolver["version"] == RESOLVER_VERSION == 5
+    assert resolver["version"] == RESOLVER_VERSION
     assert result.normalized_address == source
     if "Санкт" in source:
         assert "Красносельский" not in resolver["query"]
